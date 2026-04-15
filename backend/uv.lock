@@ -1242,8 +1242,6 @@ name = "mirofish-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "camel-ai" },
-    { name = "camel-oasis" },
     { name = "chardet" },
     { name = "charset-normalizer" },
     { name = "flask" },
@@ -1257,6 +1255,8 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "camel-ai" },
+    { name = "camel-oasis" },
     { name = "pipreqs" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1270,8 +1270,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "camel-ai", specifier = "==0.2.78" },
-    { name = "camel-oasis", specifier = "==0.2.5" },
+    { name = "camel-ai", marker = "extra == 'dev'", specifier = "==0.2.78" },
+    { name = "camel-oasis", marker = "extra == 'dev'", specifier = "==0.2.5" },
     { name = "chardet", specifier = ">=5.0.0" },
     { name = "charset-normalizer", specifier = ">=3.0.0" },
     { name = "flask", specifier = ">=3.0.0" },

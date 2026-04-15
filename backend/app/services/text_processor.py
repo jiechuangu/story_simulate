@@ -3,6 +3,7 @@
 """
 
 from typing import List, Optional
+from ..config import Config
 from ..utils.file_parser import FileParser, split_text_into_chunks
 
 
@@ -17,8 +18,8 @@ class TextProcessor:
     @staticmethod
     def split_text(
         text: str,
-        chunk_size: int = 500,
-        overlap: int = 50
+        chunk_size: int = Config.DEFAULT_CHUNK_SIZE,
+        overlap: int = Config.DEFAULT_CHUNK_OVERLAP
     ) -> List[str]:
         """
         分割文本
@@ -68,4 +69,3 @@ class TextProcessor:
             "total_lines": text.count('\n') + 1,
             "total_words": len(text.split()),
         }
-

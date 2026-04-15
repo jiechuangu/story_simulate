@@ -7,7 +7,7 @@ import uuid
 import threading
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
 from ..utils.locale import t
@@ -35,6 +35,7 @@ class Task:
     error: Optional[str] = None    # 错误信息
     metadata: Dict = field(default_factory=dict)  # 额外元数据
     progress_detail: Dict = field(default_factory=dict)  # 详细进度信息
+    logs: List[Dict[str, Any]] = field(default_factory=list)  # 任务日志流
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -50,6 +51,7 @@ class Task:
             "result": self.result,
             "error": self.error,
             "metadata": self.metadata,
+            "logs": self.logs,
         }
 
 
@@ -97,6 +99,8 @@ class TaskManager:
         
         with self._task_lock:
             self._tasks[task_id] = task
+
+        self._append_log(task, "任务已创建", level="info")
         
         return task_id
     
@@ -130,6 +134,8 @@ class TaskManager:
         with self._task_lock:
             task = self._tasks.get(task_id)
             if task:
+                previous_status = task.status
+                previous_message = task.message
                 task.updated_at = datetime.now()
                 if status is not None:
                     task.status = status
@@ -143,6 +149,12 @@ class TaskManager:
                     task.error = error
                 if progress_detail is not None:
                     task.progress_detail = progress_detail
+                if message and message != previous_message:
+                    self._append_log(task, message, level="info")
+                if status is not None and status != previous_status:
+                    self._append_log(task, f"任务状态变更为 {task.status.value}", level="status")
+                if error:
+                    self._append_log(task, error, level="error")
     
     def complete_task(self, task_id: str, result: Dict):
         """标记任务完成"""
@@ -170,6 +182,12 @@ class TaskManager:
             if task_type:
                 tasks = [t for t in tasks if t.task_type == task_type]
             return [t.to_dict() for t in sorted(tasks, key=lambda x: x.created_at, reverse=True)]
+
+    def append_log(self, task_id: str, message: str, level: str = "info", data: Optional[Dict] = None):
+        with self._task_lock:
+            task = self._tasks.get(task_id)
+            if task:
+                self._append_log(task, message, level=level, data=data)
     
     def cleanup_old_tasks(self, max_age_hours: int = 24):
         """清理旧任务"""
@@ -184,3 +202,14 @@ class TaskManager:
             for tid in old_ids:
                 del self._tasks[tid]
 
+    def _append_log(self, task: Task, message: str, level: str = "info", data: Optional[Dict] = None):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "level": level,
+            "message": message,
+        }
+        if data:
+            entry["data"] = data
+        task.logs.append(entry)
+        if len(task.logs) > 200:
+            task.logs = task.logs[-200:]

@@ -32,6 +32,10 @@
           <span class="dot"></span>
           {{ statusText }}
         </span>
+        <div class="step-actions">
+          <button class="step-action-btn" @click="openStep4Report">Step 4</button>
+          <button class="step-action-btn" @click="openStep5Interaction">Step 5</button>
+        </div>
       </div>
     </header>
 
@@ -51,15 +55,8 @@
 
       <!-- Right Panel: Step3 开始模拟 -->
       <div class="panel-wrapper right" :style="rightPanelStyle">
-        <Step3Simulation
+        <WorldWorkbench
           :simulationId="currentSimulationId"
-          :maxRounds="maxRounds"
-          :minutesPerRound="minutesPerRound"
-          :projectData="projectData"
-          :graphData="graphData"
-          :systemLogs="systemLogs"
-          @go-back="handleGoBack"
-          @next-step="handleNextStep"
           @add-log="addLog"
           @update-status="updateStatus"
         />
@@ -72,9 +69,10 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../components/GraphPanel.vue'
-import Step3Simulation from '../components/Step3Simulation.vue'
+import WorldWorkbench from '../components/WorldWorkbench.vue'
 import { getProject, getGraphData } from '../api/graph'
 import { getSimulation, getSimulationConfig, stopSimulation, closeSimulationEnv, getEnvStatus } from '../api/simulation'
+import { generateReport, getReportBySimulation } from '../api/report'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -100,6 +98,7 @@ const graphData = ref(null)
 const graphLoading = ref(false)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error
+const activeReportId = ref(null)
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
@@ -138,6 +137,54 @@ const addLog = (msg) => {
 
 const updateStatus = (status) => {
   currentStatus.value = status
+}
+
+const ensureReportForNavigation = async () => {
+  if (!currentSimulationId.value) {
+    throw new Error('Missing simulation id')
+  }
+
+  try {
+    const existingRes = await getReportBySimulation(currentSimulationId.value)
+    if (existingRes.success && existingRes.data?.report_id) {
+      activeReportId.value = existingRes.data.report_id
+      return existingRes.data.report_id
+    }
+  } catch (err) {
+    const status = err?.response?.status
+    // 404 means no report exists for this simulation yet.
+    if (status !== 404) {
+      throw err
+    }
+  }
+
+  addLog('No report found. Starting report generation...')
+  const generateRes = await generateReport({ simulation_id: currentSimulationId.value })
+  if (generateRes.success && generateRes.data?.report_id) {
+    activeReportId.value = generateRes.data.report_id
+    addLog(`Report task started: ${generateRes.data.report_id}`)
+    return generateRes.data.report_id
+  }
+
+  throw new Error(generateRes.error || 'Failed to start report generation')
+}
+
+const openStep4Report = async () => {
+  try {
+    const reportId = await ensureReportForNavigation()
+    router.push({ name: 'Report', params: { reportId } })
+  } catch (err) {
+    addLog(`Open Step 4 failed: ${err.message}`)
+  }
+}
+
+const openStep5Interaction = async () => {
+  try {
+    const reportId = await ensureReportForNavigation()
+    router.push({ name: 'Interaction', params: { reportId } })
+  } catch (err) {
+    addLog(`Open Step 5 failed: ${err.message}`)
+  }
 }
 
 // --- Layout Methods ---
@@ -384,6 +431,29 @@ onUnmounted(() => {
   gap: 16px;
 }
 
+.step-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-action-btn {
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  color: #222;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.step-action-btn:hover {
+  border-color: #b9b9b9;
+  background: #f7f7f7;
+}
+
 .workflow-step {
   display: flex;
   align-items: center;
@@ -449,4 +519,3 @@ onUnmounted(() => {
   border-right: 1px solid #EAEAEA;
 }
 </style>
-

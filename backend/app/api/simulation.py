@@ -9,7 +9,7 @@ from flask import request, jsonify, send_file
 
 from . import simulation_bp
 from ..config import Config
-from ..services.zep_entity_reader import ZepEntityReader
+from ..services.graph_entity_reader import GraphEntityReader
 from ..services.oasis_profile_generator import OasisProfileGenerator
 from ..services.simulation_manager import SimulationManager, SimulationStatus
 from ..services.simulation_runner import SimulationRunner, RunnerStatus
@@ -57,7 +57,7 @@ def get_graph_entities(graph_id: str):
         enrich: 是否获取相关边信息（默认true）
     """
     try:
-        if not Config.ZEP_API_KEY:
+        if Config.GRAPH_STORE_PROVIDER == 'zep' and not Config.ZEP_API_KEY:
             return jsonify({
                 "success": False,
                 "error": t('api.zepApiKeyMissing')
@@ -69,7 +69,7 @@ def get_graph_entities(graph_id: str):
         
         logger.info(f"获取图谱实体: graph_id={graph_id}, entity_types={entity_types}, enrich={enrich}")
         
-        reader = ZepEntityReader()
+        reader = GraphEntityReader()
         result = reader.filter_defined_entities(
             graph_id=graph_id,
             defined_entity_types=entity_types,
@@ -94,13 +94,13 @@ def get_graph_entities(graph_id: str):
 def get_entity_detail(graph_id: str, entity_uuid: str):
     """获取单个实体的详细信息"""
     try:
-        if not Config.ZEP_API_KEY:
+        if Config.GRAPH_STORE_PROVIDER == 'zep' and not Config.ZEP_API_KEY:
             return jsonify({
                 "success": False,
                 "error": t('api.zepApiKeyMissing')
             }), 500
         
-        reader = ZepEntityReader()
+        reader = GraphEntityReader()
         entity = reader.get_entity_with_context(graph_id, entity_uuid)
         
         if not entity:
@@ -127,7 +127,7 @@ def get_entity_detail(graph_id: str, entity_uuid: str):
 def get_entities_by_type(graph_id: str, entity_type: str):
     """获取指定类型的所有实体"""
     try:
-        if not Config.ZEP_API_KEY:
+        if Config.GRAPH_STORE_PROVIDER == 'zep' and not Config.ZEP_API_KEY:
             return jsonify({
                 "success": False,
                 "error": t('api.zepApiKeyMissing')
@@ -135,7 +135,7 @@ def get_entities_by_type(graph_id: str, entity_type: str):
         
         enrich = request.args.get('enrich', 'true').lower() == 'true'
         
-        reader = ZepEntityReader()
+        reader = GraphEntityReader()
         entities = reader.get_entities_by_type(
             graph_id=graph_id,
             entity_type=entity_type,
@@ -468,24 +468,12 @@ def prepare_simulation():
         use_llm_for_profiles = data.get('use_llm_for_profiles', True)
         parallel_profile_count = data.get('parallel_profile_count', 5)
         
-        # ========== 同步获取实体数量（在后台任务启动前） ==========
-        # 这样前端在调用prepare后立即就能获取到预期Agent总数
-        try:
-            logger.info(f"同步获取实体数量: graph_id={state.graph_id}")
-            reader = ZepEntityReader()
-            # 快速读取实体（不需要边信息，只统计数量）
-            filtered_preview = reader.filter_defined_entities(
-                graph_id=state.graph_id,
-                defined_entity_types=entity_types_list,
-                enrich_with_edges=False  # 不获取边信息，加快速度
-            )
-            # 保存实体数量到状态（供前端立即获取）
-            state.entities_count = filtered_preview.filtered_count
-            state.entity_types = list(filtered_preview.entity_types)
-            logger.info(f"预期实体数量: {filtered_preview.filtered_count}, 类型: {filtered_preview.entity_types}")
-        except Exception as e:
-            logger.warning(f"同步获取实体数量失败（将在后台任务中重试）: {e}")
-            # 失败不影响后续流程，后台任务会重新获取
+        # 不在启动请求里同步扫描整个图谱。
+        # 这一步在 Neo4j 大图上会非常慢，应该完全交给后台任务处理。
+        if state.entities_count:
+            logger.info(f"复用已有实体统计: count={state.entities_count}, types={state.entity_types}")
+        else:
+            logger.info(f"跳过启动前实体预扫描，后台任务将负责读取图谱: graph_id={state.graph_id}")
         
         # 创建异步任务
         task_manager = TaskManager()
@@ -499,6 +487,7 @@ def prepare_simulation():
         
         # 更新模拟状态（包含预先获取的实体数量）
         state.status = SimulationStatus.PREPARING
+        state.prepare_task_id = task_id
         manager._save_simulation_state(state)
         
         # Capture locale before spawning background thread
@@ -639,43 +628,78 @@ def prepare_simulation():
         }), 500
 
 
+def _build_prepare_runtime_snapshot(manager: SimulationManager, simulation_id: str, sim_state=None) -> dict | None:
+    from ..models.task import TaskManager
+
+    sim_state = sim_state or manager.get_simulation(simulation_id)
+    if not sim_state:
+        return None
+
+    generated_count = 0
+    try:
+        generated_count = len(manager.get_profiles(simulation_id, platform="reddit"))
+    except Exception:
+        generated_count = 0
+
+    total = sim_state.entities_count or 0
+    task = TaskManager().get_task(sim_state.prepare_task_id) if sim_state.prepare_task_id else None
+
+    if sim_state.config_generated:
+        effective_status = "ready"
+        progress = 100
+        message = t('api.alreadyPrepared')
+    elif task is not None:
+        task_dict = task.to_dict()
+        task_dict["already_prepared"] = False
+        task_dict["effective_status"] = task_dict.get("status")
+        task_dict["generated_count"] = generated_count
+        task_dict["can_resume"] = False
+        return task_dict
+    elif sim_state.status in [SimulationStatus.PREPARING, SimulationStatus.INTERRUPTED] and (generated_count > 0 or total > 0):
+        effective_status = "interrupted"
+        progress = 20 + int(min(generated_count / max(total, 1), 1) * 50) if total else 10
+        message = f"[2/4] {t('progress.generatingProfiles')}: {generated_count}/{total}" if total else t('api.prepareInProgress')
+    else:
+        effective_status = sim_state.status.value
+        progress = 0
+        message = t('api.notStartedPrepare')
+
+    return {
+        "simulation_id": simulation_id,
+        "task_id": sim_state.prepare_task_id,
+        "status": effective_status,
+        "effective_status": effective_status,
+        "progress": progress,
+        "message": message,
+        "already_prepared": effective_status == "ready",
+        "generated_count": generated_count,
+        "expected_total": total,
+        "can_resume": effective_status == "interrupted",
+        "progress_detail": {
+            "current_stage": "generating_profiles" if effective_status == "interrupted" else None,
+            "current_stage_name": t('progress.generatingProfiles') if effective_status == "interrupted" else None,
+            "stage_index": 2 if effective_status == "interrupted" else None,
+            "total_stages": 4 if effective_status == "interrupted" else None,
+            "stage_progress": int(min(generated_count / max(total, 1), 1) * 100) if total and effective_status == "interrupted" else 0,
+            "current_item": generated_count,
+            "total_items": total,
+            "item_description": message,
+        }
+    }
+
+
 @simulation_bp.route('/prepare/status', methods=['POST'])
 def get_prepare_status():
     """
     查询准备任务进度
-    
-    支持两种查询方式：
-    1. 通过task_id查询正在进行的任务进度
-    2. 通过simulation_id检查是否已有完成的准备工作
-    
-    请求（JSON）：
-        {
-            "task_id": "task_xxxx",          // 可选，prepare返回的task_id
-            "simulation_id": "sim_xxxx"      // 可选，模拟ID（用于检查已完成的准备）
-        }
-    
-    返回：
-        {
-            "success": true,
-            "data": {
-                "task_id": "task_xxxx",
-                "status": "processing|completed|ready",
-                "progress": 45,
-                "message": "...",
-                "already_prepared": true|false,  // 是否已有完成的准备
-                "prepare_info": {...}            // 已准备完成时的详细信息
-            }
-        }
     """
-    from ..models.task import TaskManager
-    
     try:
         data = request.get_json() or {}
-        
+
         task_id = data.get('task_id')
         simulation_id = data.get('simulation_id')
-        
-        # 如果提供了simulation_id，先检查是否已准备完成
+        manager = SimulationManager()
+
         if simulation_id:
             is_prepared, prepare_info = _check_simulation_prepared(simulation_id)
             if is_prepared:
@@ -687,63 +711,51 @@ def get_prepare_status():
                         "progress": 100,
                         "message": t('api.alreadyPrepared'),
                         "already_prepared": True,
-                        "prepare_info": prepare_info
+                        "prepare_info": prepare_info,
+                        "can_resume": False,
                     }
                 })
-        
-        # 如果没有task_id，返回错误
-        if not task_id:
-            if simulation_id:
-                # 有simulation_id但未准备完成
+
+            sim_state = manager.get_simulation(simulation_id)
+            snapshot = _build_prepare_runtime_snapshot(manager, simulation_id, sim_state)
+            if snapshot and (not task_id or snapshot.get('task_id') == task_id):
                 return jsonify({
                     "success": True,
-                    "data": {
-                        "simulation_id": simulation_id,
-                        "status": "not_started",
-                        "progress": 0,
-                        "message": t('api.notStartedPrepare'),
-                        "already_prepared": False
-                    }
+                    "data": snapshot,
                 })
+
+        if not task_id:
             return jsonify({
                 "success": False,
                 "error": t('api.requireTaskOrSimId')
             }), 400
-        
-        task_manager = TaskManager()
-        task = task_manager.get_task(task_id)
-        
+
+        from ..models.task import TaskManager
+        task = TaskManager().get_task(task_id)
         if not task:
-            # 任务不存在，但如果有simulation_id，检查是否已准备完成
             if simulation_id:
-                is_prepared, prepare_info = _check_simulation_prepared(simulation_id)
-                if is_prepared:
+                sim_state = manager.get_simulation(simulation_id)
+                snapshot = _build_prepare_runtime_snapshot(manager, simulation_id, sim_state)
+                if snapshot:
                     return jsonify({
                         "success": True,
-                        "data": {
-                            "simulation_id": simulation_id,
-                            "task_id": task_id,
-                            "status": "ready",
-                            "progress": 100,
-                            "message": t('api.taskCompletedPrepared'),
-                            "already_prepared": True,
-                            "prepare_info": prepare_info
-                        }
+                        "data": snapshot,
                     })
-            
             return jsonify({
                 "success": False,
                 "error": t('api.taskNotFound', id=task_id)
             }), 404
-        
+
         task_dict = task.to_dict()
         task_dict["already_prepared"] = False
-        
+        task_dict["effective_status"] = task_dict.get("status")
+        task_dict["can_resume"] = False
+
         return jsonify({
             "success": True,
             "data": task_dict
         })
-        
+
     except Exception as e:
         logger.error(f"查询任务状态失败: {str(e)}")
         return jsonify({
@@ -766,9 +778,18 @@ def get_simulation(simulation_id: str):
             }), 404
         
         result = state.to_dict()
-        
+
+        snapshot = _build_prepare_runtime_snapshot(manager, simulation_id, state)
+        if snapshot:
+            result["effective_status"] = snapshot.get("effective_status", snapshot.get("status"))
+            result["prepare_progress"] = snapshot.get("progress", 0)
+            result["prepare_message"] = snapshot.get("message", "")
+            result["can_resume"] = snapshot.get("can_resume", False)
+            if result["effective_status"] == "interrupted":
+                result["status"] = "interrupted"
+
         # 如果模拟已准备好，附加运行说明
-        if state.status == SimulationStatus.READY:
+        if result.get("status") == SimulationStatus.READY.value:
             result["run_instructions"] = manager.get_run_instructions(simulation_id)
         
         return jsonify({
@@ -918,47 +939,77 @@ def get_simulation_history():
         enriched_simulations = []
         for sim in simulations:
             sim_dict = sim.to_dict()
-            
-            # 获取模拟配置信息（从 simulation_config.json 读取 simulation_requirement）
-            config = manager.get_simulation_config(sim.simulation_id)
-            if config:
-                sim_dict["simulation_requirement"] = config.get("simulation_requirement", "")
-                time_config = config.get("time_config", {})
-                sim_dict["total_simulation_hours"] = time_config.get("total_simulation_hours", 0)
-                # 推荐轮数（后备值）
-                recommended_rounds = int(
-                    time_config.get("total_simulation_hours", 0) * 60 / 
-                    max(time_config.get("minutes_per_round", 60), 1)
-                )
+
+            sim_dict["simulation_requirement"] = ""
+            sim_dict["total_simulation_hours"] = 0
+            sim_dict["current_round"] = 0
+            sim_dict["runner_status"] = "idle"
+            sim_dict["total_rounds"] = 0
+            sim_dict["files"] = []
+            sim_dict["report_id"] = None
+            sim_dict["prepare_progress"] = 0
+            sim_dict["prepare_message"] = ""
+            sim_dict["can_resume"] = False
+
+            snapshot = _build_prepare_runtime_snapshot(manager, sim.simulation_id, sim)
+            if snapshot:
+                sim_dict["effective_status"] = snapshot.get("effective_status", snapshot.get("status"))
+                sim_dict["prepare_progress"] = snapshot.get("progress", 0)
+                sim_dict["prepare_message"] = snapshot.get("message", "")
+                sim_dict["can_resume"] = snapshot.get("can_resume", False)
+                if sim_dict["effective_status"] == "interrupted":
+                    sim_dict["status"] = "interrupted"
+
+            # 轻量快速返回：准备中或失败时只展示 state.json 中已有信息
+            if sim.status not in [SimulationStatus.PREPARING, SimulationStatus.FAILED]:
+                try:
+                    config = manager.get_simulation_config(sim.simulation_id)
+                    if config:
+                        sim_dict["simulation_requirement"] = config.get("simulation_requirement", "")
+                        time_config = config.get("time_config", {})
+                        sim_dict["total_simulation_hours"] = time_config.get("total_simulation_hours", 0)
+                        recommended_rounds = int(
+                            time_config.get("total_simulation_hours", 0) * 60 /
+                            max(time_config.get("minutes_per_round", 60), 1)
+                        )
+                    else:
+                        recommended_rounds = 0
+                except Exception:
+                    recommended_rounds = 0
+
+                try:
+                    run_state = SimulationRunner.get_run_state(sim.simulation_id)
+                    if run_state:
+                        sim_dict["current_round"] = run_state.current_round
+                        sim_dict["runner_status"] = run_state.runner_status.value
+                        sim_dict["total_rounds"] = run_state.total_rounds if run_state.total_rounds > 0 else recommended_rounds
+                    else:
+                        sim_dict["total_rounds"] = recommended_rounds
+                except Exception:
+                    sim_dict["total_rounds"] = recommended_rounds
             else:
-                sim_dict["simulation_requirement"] = ""
-                sim_dict["total_simulation_hours"] = 0
-                recommended_rounds = 0
-            
-            # 获取运行状态（从 run_state.json 读取用户设置的实际轮数）
-            run_state = SimulationRunner.get_run_state(sim.simulation_id)
-            if run_state:
-                sim_dict["current_round"] = run_state.current_round
-                sim_dict["runner_status"] = run_state.runner_status.value
-                # 使用用户设置的 total_rounds，若无则使用推荐轮数
-                sim_dict["total_rounds"] = run_state.total_rounds if run_state.total_rounds > 0 else recommended_rounds
-            else:
-                sim_dict["current_round"] = 0
-                sim_dict["runner_status"] = "idle"
-                sim_dict["total_rounds"] = recommended_rounds
-            
-            # 获取关联项目的文件列表（最多3个）
-            project = ProjectManager.get_project(sim.project_id)
-            if project and hasattr(project, 'files') and project.files:
-                sim_dict["files"] = [
-                    {"filename": f.get("filename", "未知文件")} 
-                    for f in project.files[:3]
-                ]
-            else:
-                sim_dict["files"] = []
-            
-            # 获取关联的 report_id（查找该 simulation 最新的 report）
-            sim_dict["report_id"] = _get_report_id_for_simulation(sim.simulation_id)
+                if sim_dict.get("status") == "interrupted":
+                    sim_dict["runner_status"] = "interrupted"
+                else:
+                    sim_dict["runner_status"] = "preparing" if sim.status == SimulationStatus.PREPARING else "failed"
+
+            try:
+                project = ProjectManager.get_project(sim.project_id)
+                if project:
+                    sim_dict["simulation_requirement"] = sim_dict["simulation_requirement"] or project.simulation_requirement or ""
+                    if hasattr(project, 'files') and project.files:
+                        sim_dict["files"] = [
+                            {"filename": f.get("filename", "未知文件")}
+                            for f in project.files[:3]
+                        ]
+            except Exception:
+                pass
+
+            if sim.status not in [SimulationStatus.PREPARING]:
+                try:
+                    sim_dict["report_id"] = _get_report_id_for_simulation(sim.simulation_id)
+                except Exception:
+                    sim_dict["report_id"] = None
             
             # 添加版本号
             sim_dict["version"] = "v1.0.2"
@@ -1401,7 +1452,7 @@ def generate_profiles():
         use_llm = data.get('use_llm', True)
         platform = data.get('platform', 'reddit')
         
-        reader = ZepEntityReader()
+        reader = GraphEntityReader()
         filtered = reader.filter_defined_entities(
             graph_id=graph_id,
             defined_entity_types=entity_types,
@@ -1414,10 +1465,11 @@ def generate_profiles():
                 "error": t('api.noMatchingEntities')
             }), 400
         
-        generator = OasisProfileGenerator()
+        generator = OasisProfileGenerator(graph_id=graph_id)
         profiles = generator.generate_profiles_from_entities(
             entities=filtered.entities,
-            use_llm=use_llm
+            use_llm=use_llm,
+            graph_id=graph_id,
         )
         
         if platform == "reddit":

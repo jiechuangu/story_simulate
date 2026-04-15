@@ -21,7 +21,8 @@ from zep_cloud.client import Zep
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, get_locale, set_locale, t
-from .zep_entity_reader import EntityNode, ZepEntityReader
+from .graph_store_factory import create_graph_store
+from .zep_entity_reader import EntityNode
 
 logger = get_logger('mirofish.oasis_profile')
 
@@ -68,6 +69,8 @@ class OasisAgentProfile:
             "persona": self.persona,
             "karma": self.karma,
             "created_at": self.created_at,
+            "source_entity_uuid": self.source_entity_uuid,
+            "source_entity_type": self.source_entity_type,
         }
         
         # 添加额外人设信息（如果有）
@@ -98,6 +101,8 @@ class OasisAgentProfile:
             "follower_count": self.follower_count,
             "statuses_count": self.statuses_count,
             "created_at": self.created_at,
+            "source_entity_uuid": self.source_entity_uuid,
+            "source_entity_type": self.source_entity_type,
         }
         
         # 添加额外人设信息
@@ -197,13 +202,20 @@ class OasisProfileGenerator:
             api_key=self.api_key,
             base_url=self.base_url
         )
-        
+
+        self.provider = getattr(Config, "GRAPH_STORE_PROVIDER", "zep").lower()
+        self.graph_store = None
         # Zep客户端用于检索丰富上下文
         self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
         self.zep_client = None
         self.graph_id = graph_id
-        
-        if self.zep_api_key:
+
+        if self.provider == "neo4j":
+            try:
+                self.graph_store = create_graph_store()
+            except Exception as e:
+                logger.warning(f"GraphStore初始化失败: {e}")
+        elif self.zep_api_key:
             try:
                 self.zep_client = Zep(api_key=self.zep_api_key)
             except Exception as e:
@@ -297,7 +309,10 @@ class OasisProfileGenerator:
             包含facts, node_summaries, context的字典
         """
         import concurrent.futures
-        
+
+        if self.provider == "neo4j":
+            return self._search_graph_store_for_entity(entity)
+
         if not self.zep_client:
             return {"facts": [], "node_summaries": [], "context": ""}
         
@@ -409,6 +424,38 @@ class OasisProfileGenerator:
         except Exception as e:
             logger.warning(f"Zep检索失败 ({entity_name}): {e}")
         
+        return results
+
+    def _search_graph_store_for_entity(self, entity: EntityNode) -> Dict[str, Any]:
+        results = {"facts": [], "node_summaries": [], "context": ""}
+        if not self.graph_store or not self.graph_id:
+            return results
+
+        try:
+            facts = self.graph_store.search_facts(self.graph_id, entity.name, limit=20)
+            neighbors = self.graph_store.get_neighbors(self.graph_id, entity.uuid, limit=12)
+            node_summaries = []
+            for neighbor in neighbors:
+                summary = neighbor.get("summary") or ""
+                name = neighbor.get("name") or "未知实体"
+                relation = neighbor.get("relationship", {})
+                relation_text = relation.get("description") or relation.get("type") or ""
+                if summary and relation_text:
+                    node_summaries.append(f"{name}: {summary}（关系: {relation_text}）")
+                elif summary:
+                    node_summaries.append(f"{name}: {summary}")
+                else:
+                    node_summaries.append(name)
+            results["facts"] = facts[:20]
+            results["node_summaries"] = node_summaries[:10]
+            context_parts = []
+            if results["facts"]:
+                context_parts.append("事实信息:\n" + "\n".join(f"- {f}" for f in results["facts"]))
+            if results["node_summaries"]:
+                context_parts.append("相关实体:\n" + "\n".join(f"- {s}" for s in results["node_summaries"]))
+            results["context"] = "\n\n".join(context_parts)
+        except Exception as e:
+            logger.warning(f"GraphStore检索失败 ({entity.name}): {e}")
         return results
     
     def _build_entity_context(self, entity: EntityNode) -> str:
@@ -884,8 +931,70 @@ class OasisProfileGenerator:
         profiles = [None] * total  # 预分配列表保持顺序
         completed_count = [0]  # 使用列表以便在闭包中修改
         lock = Lock()
+
+        def restore_profile(raw: Dict[str, Any], fallback_idx: int) -> OasisAgentProfile:
+            return OasisAgentProfile(
+                user_id=raw.get("user_id", fallback_idx),
+                user_name=raw.get("username") or raw.get("user_name") or self._generate_username(raw.get("name") or f"agent_{fallback_idx}"),
+                name=raw.get("name") or raw.get("username") or f"agent_{fallback_idx}",
+                bio=raw.get("bio") or "",
+                persona=raw.get("persona") or "",
+                karma=raw.get("karma", 1000),
+                friend_count=raw.get("friend_count", 100),
+                follower_count=raw.get("follower_count", 150),
+                statuses_count=raw.get("statuses_count", 500),
+                age=raw.get("age"),
+                gender=raw.get("gender"),
+                mbti=raw.get("mbti"),
+                country=raw.get("country"),
+                profession=raw.get("profession"),
+                interested_topics=raw.get("interested_topics", []) or [],
+                source_entity_uuid=raw.get("source_entity_uuid"),
+                source_entity_type=raw.get("source_entity_type"),
+                created_at=raw.get("created_at") or datetime.now().strftime("%Y-%m-%d"),
+            )
         
         # 实时写入文件的辅助函数
+        # 如果已经有部分人设落盘，优先恢复并从断点继续。
+        resumed_count = 0
+        if realtime_output_path and output_platform == "reddit":
+            try:
+                import os
+                if os.path.exists(realtime_output_path):
+                    with open(realtime_output_path, 'r', encoding='utf-8') as f:
+                        saved_profiles = json.load(f)
+                    if isinstance(saved_profiles, list):
+                        for raw in saved_profiles:
+                            if not isinstance(raw, dict):
+                                continue
+                            user_id = raw.get("user_id")
+                            candidate_idx = user_id if isinstance(user_id, int) else None
+                            if candidate_idx is None or candidate_idx < 0 or candidate_idx >= total:
+                                saved_name = raw.get("name") or raw.get("username")
+                                candidate_idx = next((i for i, entity in enumerate(entities) if profiles[i] is None and entity.name == saved_name), None)
+                            if candidate_idx is None or candidate_idx < 0 or candidate_idx >= total or profiles[candidate_idx] is not None:
+                                continue
+                            entity = entities[candidate_idx]
+                            saved_name = raw.get("name") or raw.get("username")
+                            saved_uuid = raw.get("source_entity_uuid")
+                            if saved_uuid and entity.uuid and saved_uuid != entity.uuid:
+                                continue
+                            if saved_name and entity.name and saved_name != entity.name:
+                                continue
+                            profiles[candidate_idx] = restore_profile(raw, candidate_idx)
+                            resumed_count += 1
+                        if resumed_count:
+                            completed_count[0] = resumed_count
+                            logger.info(f"检测到已有 {resumed_count}/{total} 个Agent人设，将从断点继续生成")
+                            if progress_callback:
+                                progress_callback(
+                                    resumed_count,
+                                    total,
+                                    f"恢复已有Agent人设 {resumed_count}/{total}"
+                                )
+            except Exception as e:
+                logger.warning(f"恢复已保存Agent人设失败，将从头生成: {e}")
+
         def save_profiles_realtime():
             """实时保存已生成的 profiles 到文件"""
             if not realtime_output_path:
@@ -1202,4 +1311,3 @@ class OasisProfileGenerator:
         """[已废弃] 请使用 save_profiles() 方法"""
         logger.warning("save_profiles_to_json已废弃，请使用save_profiles方法")
         self.save_profiles(profiles, file_path, platform)
-

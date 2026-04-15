@@ -26,6 +26,22 @@
             <div class="spinner-sm"></div>
             <span>{{ ontologyProgress.message || $t('step1.analyzingDocs') }}</span>
           </div>
+          <div v-if="currentPhase === 0 && ontologyProgress?.progress !== undefined" class="progress-bar-wrap">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill ontology" :style="{ width: `${ontologyProgress.progress || 0}%` }"></div>
+            </div>
+            <span class="progress-text">{{ ontologyProgress.progress || 0 }}%</span>
+          </div>
+          <div v-if="currentPhase === 0 && ontologyProgress?.detail" class="task-detail-grid">
+            <div class="task-detail-item">
+              <span class="task-detail-label">TASK</span>
+              <span class="task-detail-value">{{ ontologyProgress.detail.current_chunk || 0 }}/{{ ontologyProgress.detail.total_chunks || 0 }}</span>
+            </div>
+            <div class="task-detail-item">
+              <span class="task-detail-label">GRAPH</span>
+              <span class="task-detail-value">{{ ontologyProgress.detail.graph_id || '--' }}</span>
+            </div>
+          </div>
 
           <!-- Detail Overlay -->
           <div v-if="selectedOntologyItem" class="ontology-detail-overlay">
@@ -102,6 +118,18 @@
               </span>
             </div>
           </div>
+
+          <div v-if="ontologyArtifacts?.length" class="artifact-panel">
+            <div class="artifact-header">
+              <span class="tag-label">LATEST ONTOLOGY ARTIFACTS</span>
+            </div>
+            <div class="artifact-list">
+              <div v-for="artifact in ontologyArtifacts.slice(0, 3)" :key="artifact.filename" class="artifact-item">
+                <div class="artifact-name">{{ artifact.filename }}</div>
+                <pre class="artifact-preview">{{ artifact.preview }}</pre>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -140,6 +168,37 @@
               <span class="stat-label">{{ $t('step1.schemaTypes') }}</span>
             </div>
           </div>
+          <div v-if="currentPhase === 1 && buildProgress" class="progress-bar-wrap">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill graph" :style="{ width: `${buildProgress.progress || 0}%` }"></div>
+            </div>
+            <span class="progress-text">{{ buildProgress.progress || 0 }}%</span>
+          </div>
+          <div v-if="currentPhase === 1 && buildProgress?.detail" class="task-detail-grid">
+            <div class="task-detail-item">
+              <span class="task-detail-label">CHUNKS</span>
+              <span class="task-detail-value">{{ buildProgress.detail.current_chunk || 0 }}/{{ buildProgress.detail.total_chunks || 0 }}</span>
+            </div>
+            <div class="task-detail-item">
+              <span class="task-detail-label">PROVIDER</span>
+              <span class="task-detail-value">{{ buildProgress.detail.provider || '--' }}</span>
+            </div>
+            <div class="task-detail-item wide">
+              <span class="task-detail-label">GRAPH ID</span>
+              <span class="task-detail-value">{{ buildProgress.detail.graph_id || projectData?.graph_id || '--' }}</span>
+            </div>
+          </div>
+          <div v-if="graphArtifacts?.length" class="artifact-panel">
+            <div class="artifact-header">
+              <span class="tag-label">LATEST GRAPH ARTIFACTS</span>
+            </div>
+            <div class="artifact-list">
+              <div v-for="artifact in graphArtifacts.slice(0, 3)" :key="artifact.filename" class="artifact-item">
+                <div class="artifact-name">{{ artifact.filename }}</div>
+                <pre class="artifact-preview">{{ artifact.preview }}</pre>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -176,6 +235,13 @@
         <span class="log-title">SYSTEM DASHBOARD</span>
         <span class="log-id">{{ projectData?.project_id || 'NO_PROJECT' }}</span>
       </div>
+      <div v-if="recentTasks?.length" class="task-strip">
+        <div v-for="task in recentTasks.slice(0, 4)" :key="task.task_id" class="task-chip">
+          <span class="chip-type">{{ task.task_type }}</span>
+          <span class="chip-status">{{ task.status }}</span>
+          <span class="chip-progress">{{ task.progress }}%</span>
+        </div>
+      </div>
       <div class="log-content" ref="logContent">
         <div class="log-line" v-for="(log, idx) in systemLogs" :key="idx">
           <span class="log-time">{{ log.time }}</span>
@@ -190,7 +256,7 @@
 import { computed, ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { createSimulation } from '../api/simulation'
+import { createSimulation, listSimulations } from '../api/simulation'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -201,7 +267,10 @@ const props = defineProps({
   ontologyProgress: Object,
   buildProgress: Object,
   graphData: Object,
-  systemLogs: { type: Array, default: () => [] }
+  systemLogs: { type: Array, default: () => [] },
+  recentTasks: { type: Array, default: () => [] },
+  ontologyArtifacts: { type: Array, default: () => [] },
+  graphArtifacts: { type: Array, default: () => [] }
 })
 
 defineEmits(['next-step'])
@@ -220,6 +289,34 @@ const handleEnterEnvSetup = async () => {
   creatingSimulation.value = true
   
   try {
+    const existingRes = await listSimulations(props.projectData.project_id)
+    if (existingRes.success && Array.isArray(existingRes.data)) {
+      const reusable = [...existingRes.data]
+        .filter(sim => sim.project_id === props.projectData.project_id)
+        .sort((a, b) => {
+          const score = (sim) => {
+            let value = 0
+            if (sim.profiles_count > 0) value += 1000
+            if (sim.config_generated) value += 500
+            if (sim.entities_count > 0) value += 200
+            if (['preparing', 'ready', 'running', 'paused', 'completed', 'stopped'].includes(sim.status)) value += 100
+            if (sim.status === 'created') value -= 200
+            return value
+          }
+          const diff = score(b) - score(a)
+          if (diff !== 0) return diff
+          return new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)
+        })[0]
+
+      if (reusable?.simulation_id) {
+        router.push({
+          name: 'Simulation',
+          params: { simulationId: reusable.simulation_id }
+        })
+        return
+      }
+    }
+
     const res = await createSimulation({
       project_id: props.projectData.project_id,
       graph_id: props.projectData.graph_id,
@@ -362,6 +459,76 @@ watch(() => props.systemLogs.length, () => {
   color: #666;
   line-height: 1.5;
   margin-bottom: 16px;
+}
+
+.task-detail-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.task-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #efefef;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.task-detail-item.wide {
+  grid-column: 1 / -1;
+}
+
+.task-detail-label {
+  font-size: 10px;
+  color: #999;
+  font-weight: 700;
+}
+
+.task-detail-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #222;
+  word-break: break-all;
+}
+
+.artifact-panel {
+  margin-top: 14px;
+  border-top: 1px dashed #ededed;
+  padding-top: 12px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-item {
+  border: 1px solid #efefef;
+  border-radius: 6px;
+  background: #fcfcfc;
+  padding: 10px;
+}
+
+.artifact-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.artifact-preview {
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #555;
 }
 
 /* Step 01 Tags */
@@ -632,6 +799,42 @@ watch(() => props.systemLogs.length, () => {
   margin-bottom: 12px;
 }
 
+.progress-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.progress-bar-track {
+  flex: 1;
+  height: 8px;
+  background: #efefef;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.progress-bar-fill.ontology {
+  background: linear-gradient(90deg, #ff8a50, #ff5722);
+}
+
+.progress-bar-fill.graph {
+  background: linear-gradient(90deg, #111, #444);
+}
+
+.progress-text {
+  min-width: 38px;
+  font-size: 11px;
+  color: #666;
+  font-family: 'JetBrains Mono', monospace;
+}
+
 .spinner-sm {
   width: 14px;
   height: 14px;
@@ -662,6 +865,29 @@ watch(() => props.systemLogs.length, () => {
   font-size: 10px;
   color: #888;
 }
+
+.task-strip {
+  display: flex;
+  gap: 8px;
+  padding: 0 0 10px;
+  overflow-x: auto;
+}
+
+.task-chip {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+  border: 1px solid #2f2f2f;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #ddd;
+}
+
+.chip-type { color: #fff; }
+.chip-status { color: #ff9f7f; }
+.chip-progress { color: #aaa; }
 
 .log-content {
   display: flex;

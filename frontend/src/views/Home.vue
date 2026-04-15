@@ -207,6 +207,8 @@
 
       <!-- 历史项目数据库 -->
       <HistoryDatabase />
+      <ProjectTaskHistory />
+      <ReportTaskHistory />
     </div>
   </div>
 </template>
@@ -215,6 +217,8 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import HistoryDatabase from '../components/HistoryDatabase.vue'
+import ProjectTaskHistory from '../components/ProjectTaskHistory.vue'
+import ReportTaskHistory from '../components/ReportTaskHistory.vue'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 
 const router = useRouter()

@@ -34,6 +34,13 @@ class Config:
     
     # Zep配置
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
+    GRAPH_STORE_PROVIDER = os.environ.get('GRAPH_STORE_PROVIDER', 'zep')
+    
+    # Neo4j Aura 配置
+    NEO4J_URI = os.environ.get('NEO4J_URI')
+    NEO4J_USERNAME = os.environ.get('NEO4J_USERNAME')
+    NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+    NEO4J_DATABASE = os.environ.get('NEO4J_DATABASE')
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
@@ -41,8 +48,8 @@ class Config:
     ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
     
     # 文本处理配置
-    DEFAULT_CHUNK_SIZE = 500  # 默认切块大小
-    DEFAULT_CHUNK_OVERLAP = 50  # 默认重叠大小
+    DEFAULT_CHUNK_SIZE = int(os.environ.get('DEFAULT_CHUNK_SIZE', '2400'))  # 默认切块大小，更适合小说增量构图
+    DEFAULT_CHUNK_OVERLAP = int(os.environ.get('DEFAULT_CHUNK_OVERLAP', '240'))  # 默认重叠大小
     
     # OASIS模拟配置
     OASIS_DEFAULT_MAX_ROUNDS = int(os.environ.get('OASIS_DEFAULT_MAX_ROUNDS', '10'))
@@ -69,7 +76,14 @@ class Config:
         errors = []
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY:
+        provider = (cls.GRAPH_STORE_PROVIDER or 'zep').lower()
+        if provider == 'zep' and not cls.ZEP_API_KEY:
             errors.append("ZEP_API_KEY 未配置")
+        if provider == 'neo4j':
+            if not cls.NEO4J_URI:
+                errors.append("NEO4J_URI 未配置")
+            if not cls.NEO4J_USERNAME:
+                errors.append("NEO4J_USERNAME 未配置")
+            if not cls.NEO4J_PASSWORD:
+                errors.append("NEO4J_PASSWORD 未配置")
         return errors
-

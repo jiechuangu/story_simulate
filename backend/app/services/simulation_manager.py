@@ -14,7 +14,7 @@ from enum import Enum
 
 from ..config import Config
 from ..utils.logger import get_logger
-from .zep_entity_reader import ZepEntityReader, FilteredEntities
+from .graph_entity_reader import GraphEntityReader
 from .oasis_profile_generator import OasisProfileGenerator, OasisAgentProfile
 from .simulation_config_generator import SimulationConfigGenerator, SimulationParameters
 from ..utils.locale import t
@@ -32,6 +32,7 @@ class SimulationStatus(str, Enum):
     STOPPED = "stopped"      # 模拟被手动停止
     COMPLETED = "completed"  # 模拟自然完成
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class PlatformType(str, Enum):
@@ -62,6 +63,7 @@ class SimulationState:
     # 配置生成信息
     config_generated: bool = False
     config_reasoning: str = ""
+    prepare_task_id: Optional[str] = None
     
     # 运行时数据
     current_round: int = 0
@@ -89,6 +91,7 @@ class SimulationState:
             "entity_types": self.entity_types,
             "config_generated": self.config_generated,
             "config_reasoning": self.config_reasoning,
+            "prepare_task_id": self.prepare_task_id,
             "current_round": self.current_round,
             "twitter_status": self.twitter_status,
             "reddit_status": self.reddit_status,
@@ -108,6 +111,7 @@ class SimulationState:
             "profiles_count": self.profiles_count,
             "entity_types": self.entity_types,
             "config_generated": self.config_generated,
+            "prepare_task_id": self.prepare_task_id,
             "error": self.error,
         }
 
@@ -117,7 +121,7 @@ class SimulationManager:
     模拟管理器
     
     核心功能：
-    1. 从Zep图谱读取实体并过滤
+    1. 从图谱读取实体并过滤
     2. 生成OASIS Agent Profile
     3. 使用LLM智能生成模拟配置参数
     4. 准备预设脚本所需的所有文件
@@ -180,6 +184,7 @@ class SimulationManager:
             entity_types=data.get("entity_types", []),
             config_generated=data.get("config_generated", False),
             config_reasoning=data.get("config_reasoning", ""),
+            prepare_task_id=data.get("prepare_task_id"),
             current_round=data.get("current_round", 0),
             twitter_status=data.get("twitter_status", "not_started"),
             reddit_status=data.get("reddit_status", "not_started"),
@@ -187,6 +192,21 @@ class SimulationManager:
             updated_at=data.get("updated_at", datetime.now().isoformat()),
             error=data.get("error"),
         )
+
+        sim_dir = self._get_simulation_dir(simulation_id)
+        reddit_profiles = os.path.join(sim_dir, "reddit_profiles.json")
+        if os.path.exists(reddit_profiles):
+            try:
+                with open(reddit_profiles, 'r', encoding='utf-8') as f:
+                    profiles = json.load(f)
+                if isinstance(profiles, list):
+                    state.profiles_count = max(state.profiles_count, len(profiles))
+            except Exception:
+                pass
+
+        config_path = os.path.join(sim_dir, "simulation_config.json")
+        if os.path.exists(config_path):
+            state.config_generated = True
         
         self._simulations[simulation_id] = state
         return state
@@ -241,7 +261,7 @@ class SimulationManager:
         准备模拟环境（全程自动化）
         
         步骤：
-        1. 从Zep图谱读取并过滤实体
+        1. 从图谱读取并过滤实体
         2. 为每个实体生成OASIS Agent Profile（可选LLM增强，支持并行）
         3. 使用LLM智能生成模拟配置参数（时间、活跃度、发言频率等）
         4. 保存配置文件和Profile文件
@@ -272,8 +292,8 @@ class SimulationManager:
             # ========== 阶段1: 读取并过滤实体 ==========
             if progress_callback:
                 progress_callback("reading", 0, t('progress.connectingZepGraph'))
-            
-            reader = ZepEntityReader()
+
+            reader = GraphEntityReader()
             
             if progress_callback:
                 progress_callback("reading", 30, t('progress.readingNodeData'))
@@ -312,7 +332,7 @@ class SimulationManager:
                     total=total_entities
                 )
             
-            # 传入graph_id以启用Zep检索功能，获取更丰富的上下文
+            # 传入graph_id以启用图谱上下文增强
             generator = OasisProfileGenerator(graph_id=state.graph_id)
             
             def profile_progress(current, total, msg):
@@ -340,7 +360,7 @@ class SimulationManager:
                 entities=filtered.entities,
                 use_llm=use_llm_for_profiles,
                 progress_callback=profile_progress,
-                graph_id=state.graph_id,  # 传入graph_id用于Zep检索
+                graph_id=state.graph_id,
                 parallel_count=parallel_profile_count,  # 并行生成数量
                 realtime_output_path=realtime_output_path,  # 实时保存路径
                 output_platform=realtime_platform  # 输出格式

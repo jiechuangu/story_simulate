@@ -10,6 +10,7 @@ export function generateOntology(formData) {
     service({
       url: '/api/graph/ontology/generate',
       method: 'post',
+      timeout: 1800000,
       data: formData,
       headers: {
         'Content-Type': 'multipart/form-data'
@@ -45,6 +46,13 @@ export function getTaskStatus(taskId) {
   })
 }
 
+export function listTasks() {
+  return service({
+    url: '/api/graph/tasks',
+    method: 'get'
+  })
+}
+
 /**
  * 获取图谱数据
  * @param {String} graphId - 图谱ID
@@ -67,4 +75,28 @@ export function getProject(projectId) {
     url: `/api/graph/project/${projectId}`,
     method: 'get'
   })
+}
+
+export function listProjects(limit = 20) {
+  return service({
+    url: `/api/graph/project/list?limit=${limit}`,
+    method: 'get'
+  })
+}
+
+export function getProjectArtifacts(projectId) {
+  return service({
+    url: `/api/graph/project/${projectId}/artifacts`,
+    method: 'get'
+  })
+}
+
+export function importProjectForRebuild(data) {
+  return requestWithRetry(() =>
+    service({
+      url: '/api/graph/project/import-rebuild',
+      method: 'post',
+      data
+    })
+  )
 }

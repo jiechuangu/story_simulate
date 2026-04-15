@@ -5,6 +5,8 @@ import SimulationView from '../views/SimulationView.vue'
 import SimulationRunView from '../views/SimulationRunView.vue'
 import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
+import RoleControlView from '../views/RoleControlView.vue'
+import RoleIntroView from '../views/RoleIntroView.vue'
 
 const routes = [
   {
@@ -40,6 +42,18 @@ const routes = [
     path: '/interaction/:reportId',
     name: 'Interaction',
     component: InteractionView,
+    props: true
+  },
+  {
+    path: '/interaction/:reportId/role/:characterId',
+    name: 'RoleControl',
+    component: RoleControlView,
+    props: true
+  },
+  {
+    path: '/interaction/:reportId/role/:characterId/intro',
+    name: 'RoleIntro',
+    component: RoleIntroView,
     props: true
   }
 ]

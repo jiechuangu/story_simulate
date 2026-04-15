@@ -19,10 +19,6 @@ dependencies = [
     # Zep Cloud
     "zep-cloud==3.13.0",
     
-    # OASIS 社交媒体模拟
-    "camel-oasis==0.2.5",
-    "camel-ai==0.2.78",
-    
     # 文件处理
     "PyMuPDF>=1.24.0",
     # 编码检测（支持非UTF-8编码的文本文件）
@@ -39,6 +35,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pipreqs>=0.5.0",
+    "camel-oasis==0.2.5",
+    "camel-ai==0.2.78",
 ]
 
 [build-system]

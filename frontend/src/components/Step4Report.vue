@@ -87,6 +87,15 @@
 
         <!-- Workflow Overview (flat, status-based palette) -->
         <div class="workflow-overview" v-if="agentLogs.length > 0 || reportOutline">
+          <div class="workflow-actions">
+            <button
+              class="retry-btn"
+              :disabled="retrying || !props.simulationId"
+              @click="retryGenerateReport"
+            >
+              {{ retrying ? '重试中...' : '重新生成报告' }}
+            </button>
+          </div>
           <div class="workflow-metrics">
             <div class="metric">
               <span class="metric-label">Sections</span>
@@ -393,7 +402,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, h, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { getAgentLog, getConsoleLog } from '../api/report'
+import { getAgentLog, getConsoleLog, generateReport } from '../api/report'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -430,6 +439,55 @@ const leftPanel = ref(null)
 const rightPanel = ref(null)
 const logContent = ref(null)
 const showRawResult = reactive({})
+const retrying = ref(false)
+const hasError = ref(false)
+
+const resetLocalState = () => {
+  agentLogs.value = []
+  consoleLogs.value = []
+  agentLogLine.value = 0
+  consoleLogLine.value = 0
+  reportOutline.value = null
+  currentSectionIndex.value = null
+  generatedSections.value = {}
+  expandedContent.value = new Set()
+  expandedLogs.value = new Set()
+  collapsedSections.value = new Set()
+  isComplete.value = false
+  hasError.value = false
+  startTime.value = null
+}
+
+const retryGenerateReport = async () => {
+  if (retrying.value || !props.simulationId) return
+  retrying.value = true
+  try {
+    addLog(`Retrying Step4 report generation for simulation: ${props.simulationId}`)
+    const res = await generateReport({
+      simulation_id: props.simulationId,
+      force_regenerate: true
+    })
+
+    if (!res.success || !res.data?.report_id) {
+      throw new Error(res.error || 'Failed to start report regeneration')
+    }
+
+    const nextReportId = res.data.report_id
+    addLog(`New report task started: ${nextReportId}`)
+    stopPolling()
+    resetLocalState()
+
+    if (nextReportId !== props.reportId) {
+      router.replace({ name: 'Report', params: { reportId: nextReportId } })
+    } else {
+      startPolling()
+    }
+  } catch (err) {
+    addLog(`Report regeneration failed: ${err.message}`)
+  } finally {
+    retrying.value = false
+  }
+}
 
 // Toggle functions
 const toggleRawResult = (timestamp, event) => {
@@ -1707,12 +1765,14 @@ const QuickSearchDisplay = {
 
 // Computed
 const statusClass = computed(() => {
+  if (hasError.value) return 'error'
   if (isComplete.value) return 'completed'
   if (agentLogs.value.length > 0) return 'processing'
   return 'pending'
 })
 
 const statusText = computed(() => {
+  if (hasError.value) return 'Error'
   if (isComplete.value) return 'Completed'
   if (agentLogs.value.length > 0) return 'Generating...'
   return 'Waiting'
@@ -2059,6 +2119,14 @@ const fetchAgentLog = async () => {
             stopPolling()
             // 滚动逻辑统一在循环结束后的 nextTick 中处理
           }
+
+          if (log.action === 'error' || log.stage === 'failed') {
+            hasError.value = true
+            isComplete.value = false
+            currentSectionIndex.value = null
+            emit('update-status', 'error')
+            stopPolling()
+          }
           
           if (log.action === 'report_start') {
             startTime.value = new Date(log.timestamp)
@@ -2179,6 +2247,7 @@ const stopPolling = () => {
 onMounted(() => {
   if (props.reportId) {
     addLog(`Report Agent initialized: ${props.reportId}`)
+    emit('update-status', 'processing')
     startPolling()
   }
 })
@@ -2189,19 +2258,8 @@ onUnmounted(() => {
 
 watch(() => props.reportId, (newId) => {
   if (newId) {
-    agentLogs.value = []
-    consoleLogs.value = []
-    agentLogLine.value = 0
-    consoleLogLine.value = 0
-    reportOutline.value = null
-    currentSectionIndex.value = null
-    generatedSections.value = {}
-    expandedContent.value = new Set()
-    expandedLogs.value = new Set()
-    collapsedSections.value = new Set()
-    isComplete.value = false
-    startTime.value = null
-    
+    resetLocalState()
+    emit('update-status', 'processing')
     startPolling()
   }
 }, { immediate: true })
@@ -2721,6 +2779,32 @@ watch(() => props.reportId, (newId) => {
   padding: 16px 20px 0 20px;
 }
 
+.workflow-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.retry-btn {
+  border: 1px solid #D1D5DB;
+  background: #FFFFFF;
+  color: #111827;
+  border-radius: 10px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry-btn:hover:not(:disabled) {
+  background: #F9FAFB;
+}
+
+.retry-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .workflow-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -2774,6 +2858,12 @@ watch(() => props.reportId, (newId) => {
   background: #ECFDF5;
   border-color: #A7F3D0;
   color: #065F46;
+}
+
+.metric-pill.pill--error {
+  background: #FEF2F2;
+  border-color: #FECACA;
+  color: #991B1B;
 }
 
 .metric-pill.pill--pending {

@@ -50,7 +50,7 @@
           </div>
           <div class="step-status">
             <span v-if="phase > 1" class="badge success">{{ $t('common.completed') }}</span>
-            <span v-else-if="phase === 1" class="badge processing">{{ prepareProgress }}%</span>
+            <span v-else-if="phase === 1" class="badge processing">{{ effectivePrepareProgress }}%</span>
             <span v-else class="badge pending">{{ $t('common.pending') }}</span>
           </div>
         </div>
@@ -61,10 +61,29 @@
             {{ $t('step2.generateAgentPersonaDesc') }}
           </p>
 
+          <div v-if="prepareInterrupted" class="resume-banner">
+            <span class="resume-copy">Agent 人设生成已中断，当前可从 {{ effectiveGeneratedCount }}/{{ expectedTotal || '?' }} 继续。</span>
+            <button class="resume-btn" @click="resumePrepareSimulation">Resume</button>
+          </div>
+
+          <div v-if="phase >= 1" class="stage-progress">
+            <div class="stage-progress-header">
+              <span class="stage-progress-title">{{ $t('step2.generateAgentPersona') }}</span>
+              <span class="stage-progress-value">{{ effectiveGeneratedCount }}/{{ expectedTotal || '?' }}</span>
+            </div>
+            <div class="stage-progress-track">
+              <div class="stage-progress-fill persona" :style="{ width: `${profileStageProgress}%` }"></div>
+            </div>
+            <div class="stage-progress-meta">
+              <span>{{ profileStageProgress }}%</span>
+              <span>{{ profileProgressText }}</span>
+            </div>
+          </div>
+
           <!-- Profiles Stats -->
           <div v-if="profiles.length > 0" class="stats-grid">
             <div class="stat-card">
-              <span class="stat-value">{{ profiles.length }}</span>
+              <span class="stat-value">{{ effectiveGeneratedCount }}</span>
               <span class="stat-label">{{ $t('step2.currentAgentCount') }}</span>
             </div>
             <div class="stat-card">
@@ -122,7 +141,7 @@
           </div>
           <div class="step-status">
             <span v-if="phase > 2" class="badge success">{{ $t('common.completed') }}</span>
-            <span v-else-if="phase === 2" class="badge processing">{{ $t('step2.generating') }}</span>
+            <span v-else-if="phase === 2" class="badge processing">{{ configStageProgress }}%</span>
             <span v-else class="badge pending">{{ $t('common.pending') }}</span>
           </div>
         </div>
@@ -132,6 +151,20 @@
           <p class="description">
             {{ $t('step2.dualPlatformConfigDesc') }}
           </p>
+
+          <div v-if="phase >= 2" class="stage-progress">
+            <div class="stage-progress-header">
+              <span class="stage-progress-title">{{ $t('step2.dualPlatformConfig') }}</span>
+              <span class="stage-progress-value">{{ configStageCurrent }}/{{ configStageTotal }}</span>
+            </div>
+            <div class="stage-progress-track">
+              <div class="stage-progress-fill config" :style="{ width: `${configStageProgress}%` }"></div>
+            </div>
+            <div class="stage-progress-meta">
+              <span>{{ configStageProgress }}%</span>
+              <span>{{ configProgressText }}</span>
+            </div>
+          </div>
           
           <!-- Config Preview -->
           <div v-if="simulationConfig" class="config-detail-panel">
@@ -638,6 +671,7 @@ import {
   prepareSimulation,
   getPrepareStatus,
   getSimulationProfilesRealtime,
+  getSimulation,
   getSimulationConfig,
   getSimulationConfigRealtime
 } from '../api/simulation'
@@ -659,12 +693,14 @@ const taskId = ref(null)
 const prepareProgress = ref(0)
 const currentStage = ref('')
 const progressMessage = ref('')
+const prepareDetail = ref({})
 const profiles = ref([])
 const entityTypes = ref([])
 const expectedTotal = ref(null)
 const simulationConfig = ref(null)
 const selectedProfile = ref(null)
 const showProfilesDetail = ref(true)
+const prepareInterrupted = ref(false)
 
 // 日志去重：记录上一次输出的关键信息
 let lastLoggedMessage = ''
@@ -735,6 +771,84 @@ const totalTopicsCount = computed(() => {
   }, 0)
 })
 
+const effectiveGeneratedCount = computed(() => {
+  const total = expectedTotal.value || 0
+  const generated = profiles.value.length || 0
+  return total ? Math.min(generated, total) : generated
+})
+
+const effectivePrepareProgress = computed(() => {
+  const total = expectedTotal.value || 0
+  if (!total) {
+    return Math.min(100, prepareProgress.value || 0)
+  }
+  const derived = 20 + Math.floor((effectiveGeneratedCount.value / total) * 50)
+  return Math.min(100, Math.max(derived, Math.min(100, prepareProgress.value || 0)))
+})
+
+const profileStageProgress = computed(() => {
+  const total = expectedTotal.value || 0
+  if (total > 0) {
+    return Math.min(100, Math.round((effectiveGeneratedCount.value / total) * 100))
+  }
+  if (phase.value > 1) return 100
+  if (prepareDetail.value?.current_stage === 'generating_profiles') {
+    return Math.min(100, prepareDetail.value.stage_progress || 0)
+  }
+  return Math.min(100, prepareProgress.value || 0)
+})
+
+const profileProgressText = computed(() => {
+  if (prepareInterrupted.value) {
+    return progressMessage.value || 'Interrupted'
+  }
+  if (expectedTotal.value && effectiveGeneratedCount.value >= expectedTotal.value) {
+    return 'Profiles ready'
+  }
+  return progressMessage.value || 'Generating agent personas...'
+})
+
+const configStageCurrent = computed(() => {
+  if (simulationConfig.value) return 3
+  const detail = prepareDetail.value || {}
+  if (detail.current_stage === 'generating_config' && detail.current_item) {
+    return detail.current_item
+  }
+  return phase.value > 2 ? 3 : 0
+})
+
+const configStageTotal = computed(() => {
+  if (simulationConfig.value) return 3
+  const detail = prepareDetail.value || {}
+  if (detail.current_stage === 'generating_config' && detail.total_items) {
+    return detail.total_items
+  }
+  return 3
+})
+
+const configStageProgress = computed(() => {
+  if (simulationConfig.value) return 100
+  const detail = prepareDetail.value || {}
+  if (detail.current_stage === 'generating_config') {
+    if (detail.total_items > 0 && detail.current_item > 0) {
+      return Math.min(100, Math.round((detail.current_item / detail.total_items) * 100))
+    }
+    if (typeof detail.stage_progress === 'number') {
+      return Math.min(100, Math.max(0, detail.stage_progress))
+    }
+  }
+  if (phase.value > 2) return 100
+  if (phase.value < 2) return 0
+  return Math.min(100, Math.max(0, Math.round((((prepareProgress.value || 70) - 70) / 20) * 100)))
+})
+
+const configProgressText = computed(() => {
+  if (simulationConfig.value) {
+    return 'Configuration ready'
+  }
+  return progressMessage.value || 'Generating world configuration...'
+})
+
 // Methods
 const addLog = (msg) => {
   emit('add-log', msg)
@@ -768,6 +882,11 @@ const selectProfile = (profile) => {
   selectedProfile.value = profile
 }
 
+const resumePrepareSimulation = async () => {
+  addLog(`Resume prepare for ${props.simulationId}`)
+  await startPrepareSimulation()
+}
+
 // 自动开始准备模拟
 const startPrepareSimulation = async () => {
   if (!props.simulationId) {
@@ -778,6 +897,7 @@ const startPrepareSimulation = async () => {
   
   // 标记第一步完成，开始第二步
   phase.value = 1
+  prepareInterrupted.value = false
   addLog(t('log.simInstanceCreated', { id: props.simulationId }))
   addLog(t('log.preparingSimEnv'))
   emit('update-status', 'processing')
@@ -791,6 +911,7 @@ const startPrepareSimulation = async () => {
     
     if (res.success && res.data) {
       if (res.data.already_prepared) {
+        prepareInterrupted.value = false
         addLog(t('log.detectedExistingPrep'))
         await loadPreparedData()
         return
@@ -820,8 +941,73 @@ const startPrepareSimulation = async () => {
     }
   } catch (err) {
     addLog(t('log.prepareException', { error: err.message }))
+
+    // 启动请求超时并不代表后台任务失败；优先尝试恢复并转入轮询。
+    const recovered = await recoverPrepareState()
+    if (recovered) {
+      addLog(t('log.startPollingProgress'))
+      return
+    }
+
     emit('update-status', 'error')
   }
+}
+
+const recoverPrepareState = async () => {
+  if (!props.simulationId) return false
+
+  try {
+    const res = await getSimulation(props.simulationId)
+    if (!res.success || !res.data) return false
+
+    const sim = res.data
+    if (sim.entities_count) {
+      expectedTotal.value = sim.entities_count
+    }
+
+    if (sim.status === 'ready' && sim.config_generated) {
+      addLog(t('log.detectedExistingPrep'))
+      await loadPreparedData()
+      return true
+    }
+
+    if (sim.status === 'preparing') {
+      prepareInterrupted.value = false
+      phase.value = 1
+      taskId.value = sim.prepare_task_id || null
+      prepareProgress.value = sim.prepare_progress || prepareProgress.value
+      progressMessage.value = sim.prepare_message || progressMessage.value
+      prepareDetail.value = sim.progress_detail || prepareDetail.value
+      addLog(t('log.preparingSimEnv'))
+      if (sim.entities_count) {
+        addLog(t('log.zepEntitiesFound', { count: sim.entities_count }))
+      }
+      emit('update-status', 'processing')
+      startPolling()
+      startProfilesPolling()
+      return true
+    }
+
+    if (sim.status === 'interrupted') {
+      phase.value = 1
+      prepareInterrupted.value = true
+      taskId.value = sim.prepare_task_id || null
+      prepareProgress.value = sim.prepare_progress || 0
+      progressMessage.value = sim.prepare_message || 'Prepare interrupted'
+      prepareDetail.value = sim.progress_detail || {}
+      addLog(`Prepare interrupted at ${sim.prepare_progress || 0}%`)
+      if (sim.entities_count) {
+        expectedTotal.value = sim.entities_count
+      }
+      emit('update-status', 'interrupted')
+      await fetchProfilesRealtime()
+      return true
+    }
+  } catch (err) {
+    console.warn('恢复模拟准备状态失败:', err)
+  }
+
+  return false
 }
 
 const startPolling = () => {
@@ -861,6 +1047,7 @@ const pollPrepareStatus = async () => {
       // 更新进度
       prepareProgress.value = data.progress || 0
       progressMessage.value = data.message || ''
+      prepareDetail.value = data.progress_detail || {}
       
       // 解析阶段信息并输出详细日志
       if (data.progress_detail) {
@@ -893,10 +1080,17 @@ const pollPrepareStatus = async () => {
       
       // 检查是否完成
       if (data.status === 'completed' || data.status === 'ready' || data.already_prepared) {
+        prepareInterrupted.value = false
         addLog(t('log.prepareComplete'))
         stopPolling()
         stopProfilesPolling()
         await loadPreparedData()
+      } else if (data.status === 'interrupted') {
+        prepareInterrupted.value = true
+        emit('update-status', 'interrupted')
+        addLog(`Prepare interrupted at ${data.progress || 0}%`)
+        stopPolling()
+        stopProfilesPolling()
       } else if (data.status === 'failed') {
         addLog(t('log.prepareFailedWithError', { error: data.error || t('common.unknownError') }))
         stopPolling()
@@ -1068,11 +1262,13 @@ watch(() => props.systemLogs?.length, () => {
   })
 })
 
-onMounted(() => {
-  // 自动开始准备流程
+onMounted(async () => {
   if (props.simulationId) {
     addLog(t('log.step2Init'))
-    startPrepareSimulation()
+    const recovered = await recoverPrepareState()
+    if (!recovered) {
+      startPrepareSimulation()
+    }
   }
 })
 
@@ -1177,6 +1373,67 @@ onUnmounted(() => {
   color: #666;
   line-height: 1.5;
   margin-bottom: 16px;
+}
+
+.stage-progress {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid #ECECEC;
+  border-radius: 8px;
+  background: #FCFCFC;
+}
+
+.stage-progress-header,
+.stage-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stage-progress-title,
+.stage-progress-value,
+.stage-progress-meta {
+  font-size: 11px;
+}
+
+.stage-progress-title {
+  color: #555;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.stage-progress-value {
+  font-family: 'JetBrains Mono', monospace;
+  color: #111;
+  font-weight: 600;
+}
+
+.stage-progress-track {
+  height: 8px;
+  margin: 10px 0 8px;
+  border-radius: 999px;
+  background: #EBEBEB;
+  overflow: hidden;
+}
+
+.stage-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.stage-progress-fill.persona {
+  background: linear-gradient(90deg, #ff8a65 0%, #ff5722 100%);
+}
+
+.stage-progress-fill.config {
+  background: linear-gradient(90deg, #2f80ed 0%, #1c5fd4 100%);
+}
+
+.stage-progress-meta {
+  color: #777;
 }
 
 /* Action Section */

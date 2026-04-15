@@ -43,6 +43,25 @@ export const getReport = (reportId) => {
 }
 
 /**
+ * 根据 simulation 获取报告
+ * @param {string} simulationId
+ */
+export const getReportBySimulation = (simulationId) => {
+  return service.get(`/api/report/by-simulation/${simulationId}`)
+}
+
+/**
+ * 获取报告列表
+ * @param {number} limit
+ * @param {string} simulationId
+ */
+export const listReports = (limit = 12, simulationId = null) => {
+  const params = { limit }
+  if (simulationId) params.simulation_id = simulationId
+  return service.get('/api/report/list', { params })
+}
+
+/**
  * 与 Report Agent 对话
  * @param {Object} data - { simulation_id, message, chat_history? }
  */

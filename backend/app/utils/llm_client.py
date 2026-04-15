@@ -99,5 +99,86 @@ class LLMClient:
         try:
             return json.loads(cleaned_response)
         except json.JSONDecodeError:
+            extracted = self._extract_json_object(cleaned_response)
+            if extracted is not None:
+                return extracted
+
+            repaired = self._repair_json_response(cleaned_response)
+            if repaired is not None:
+                return repaired
+
             raise ValueError(f"LLM返回的JSON格式无效: {cleaned_response}")
 
+    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        尝试从混合文本中提取第一个完整 JSON 对象
+        """
+        start = text.find('{')
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:idx + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        return None
+        return None
+
+    def _repair_json_response(self, bad_response: str) -> Optional[Dict[str, Any]]:
+        """
+        当模型没有按要求返回 JSON 时，发起一次轻量修复请求
+        """
+        repair_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是 JSON 修复器。"
+                    "你会把用户提供的文本转换为单个有效 JSON 对象。"
+                    "只输出 JSON，不要解释，不要 markdown。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请把下面的内容改写为一个合法 JSON 对象。"
+                    "如果原文是结构化设计说明，请尽量保留字段层次。原文如下：\n\n"
+                    f"{bad_response}"
+                ),
+            },
+        ]
+
+        repaired_text = self.chat(
+            messages=repair_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            response_format={"type": "json_object"}
+        )
+        repaired_text = repaired_text.strip()
+        repaired_text = re.sub(r'^```(?:json)?\s*\n?', '', repaired_text, flags=re.IGNORECASE)
+        repaired_text = re.sub(r'\n?```\s*$', '', repaired_text).strip()
+
+        try:
+            return json.loads(repaired_text)
+        except json.JSONDecodeError:
+            return self._extract_json_object(repaired_text)

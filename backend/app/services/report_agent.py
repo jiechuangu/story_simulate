@@ -22,12 +22,15 @@ from ..config import Config
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, t
+from .graph_store_factory import create_graph_store
 from .zep_tools import (
     ZepToolsService, 
     SearchResult, 
     InsightForgeResult, 
     PanoramaResult,
-    InterviewResult
+    InterviewResult,
+    NodeInfo,
+    EdgeInfo
 )
 
 logger = get_logger('mirofish.report_agent')
@@ -902,8 +905,15 @@ class ReportAgent:
         self.graph_id = graph_id
         self.simulation_id = simulation_id
         self.simulation_requirement = simulation_requirement
+        self.graph_provider = getattr(Config, "GRAPH_STORE_PROVIDER", "zep").lower()
         
         self.llm = llm_client or LLMClient()
+        self.graph_store = None
+        if self.graph_provider == "neo4j":
+            try:
+                self.graph_store = create_graph_store()
+            except Exception as e:
+                logger.warning(f"Neo4j GraphStore 初始化失败，将尝试回退 Zep: {e}")
         self.zep_tools = zep_tools or ZepToolsService()
         
         # 工具定义
@@ -915,6 +925,245 @@ class ReportAgent:
         self.console_logger: Optional[ReportConsoleLogger] = None
         
         logger.info(t('report.agentInitDone', graphId=graph_id, simulationId=simulation_id))
+
+    def _get_simulation_context(self, limit: int = 30) -> Dict[str, Any]:
+        """按 provider 获取模拟上下文。"""
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.get_simulation_context(
+                graph_id=self.graph_id,
+                simulation_requirement=self.simulation_requirement,
+                limit=limit
+            )
+
+        graph_data = {}
+        if hasattr(self.graph_store, "get_graph_data"):
+            graph_data = self.graph_store.get_graph_data(self.graph_id) or {}
+        nodes = graph_data.get("nodes", [])
+        edges = graph_data.get("edges", [])
+        related_facts = self.graph_store.search_facts(self.graph_id, self.simulation_requirement, limit=limit)
+
+        entity_types: Dict[str, int] = {}
+        for node in nodes:
+            labels = node.get("labels", []) or []
+            node_type = next((label for label in labels if label not in ["Entity", "Node"]), "Entity")
+            entity_types[node_type] = entity_types.get(node_type, 0) + 1
+
+        relation_types: Dict[str, int] = {}
+        for edge in edges:
+            relation_type = edge.get("name") or edge.get("fact_type") or "RELATES_TO"
+            relation_types[relation_type] = relation_types.get(relation_type, 0) + 1
+
+        entities = []
+        for node in nodes[:limit]:
+            labels = node.get("labels", []) or []
+            node_type = next((label for label in labels if label not in ["Entity", "Node"]), "Entity")
+            entities.append({
+                "name": node.get("name", ""),
+                "type": node_type,
+                "summary": node.get("summary", "")
+            })
+
+        return {
+            "simulation_requirement": self.simulation_requirement,
+            "related_facts": related_facts,
+            "graph_statistics": {
+                "graph_id": self.graph_id,
+                "total_nodes": len(nodes),
+                "total_edges": len(edges),
+                "entity_types": entity_types,
+                "relation_types": relation_types
+            },
+            "entities": entities,
+            "total_entities": len(nodes)
+        }
+
+    def _quick_search(self, query: str, limit: int = 10) -> SearchResult:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.quick_search(
+                graph_id=self.graph_id,
+                query=query,
+                limit=limit
+            )
+
+        facts = self.graph_store.search_facts(self.graph_id, query, limit=limit)
+        return SearchResult(
+            facts=facts,
+            edges=[],
+            nodes=[],
+            query=query,
+            total_count=len(facts)
+        )
+
+    def _panorama_search(self, query: str, include_expired: bool = True, limit: int = 50) -> PanoramaResult:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.panorama_search(
+                graph_id=self.graph_id,
+                query=query,
+                include_expired=include_expired,
+                limit=limit
+            )
+
+        graph_data = {}
+        if hasattr(self.graph_store, "get_graph_data"):
+            graph_data = self.graph_store.get_graph_data(self.graph_id) or {}
+        nodes = graph_data.get("nodes", [])
+        edges = graph_data.get("edges", [])
+
+        node_infos = [
+            NodeInfo(
+                uuid=node.get("uuid") or node.get("entity_id") or "",
+                name=node.get("name") or "",
+                labels=node.get("labels") or ["Entity"],
+                summary=node.get("summary") or "",
+                attributes=node.get("attributes") or {}
+            )
+            for node in nodes
+        ]
+
+        edge_infos = [
+            EdgeInfo(
+                uuid=edge.get("uuid") or "",
+                name=edge.get("name") or edge.get("fact_type") or "RELATES_TO",
+                fact=edge.get("fact") or "",
+                source_node_uuid=edge.get("source_node_uuid") or "",
+                target_node_uuid=edge.get("target_node_uuid") or "",
+                source_node_name=edge.get("source_name"),
+                target_node_name=edge.get("target_name"),
+                created_at=edge.get("created_at"),
+                valid_at=edge.get("valid_at"),
+                invalid_at=edge.get("invalid_at"),
+                expired_at=edge.get("expired_at"),
+            )
+            for edge in edges
+        ]
+
+        query_lower = (query or "").lower()
+        active_facts = []
+        for edge in edge_infos:
+            if not edge.fact:
+                continue
+            if not query_lower or query_lower in edge.fact.lower():
+                active_facts.append(edge.fact)
+        if not active_facts:
+            active_facts = [edge.fact for edge in edge_infos if edge.fact]
+        active_facts = active_facts[:limit]
+
+        return PanoramaResult(
+            query=query,
+            all_nodes=node_infos,
+            all_edges=edge_infos,
+            active_facts=active_facts,
+            historical_facts=[],
+            total_nodes=len(node_infos),
+            total_edges=len(edge_infos),
+            active_count=len(active_facts),
+            historical_count=0
+        )
+
+    def _insight_forge(self, query: str, report_context: str = "", max_sub_queries: int = 5) -> InsightForgeResult:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.insight_forge(
+                graph_id=self.graph_id,
+                query=query,
+                simulation_requirement=self.simulation_requirement,
+                report_context=report_context,
+                max_sub_queries=max_sub_queries
+            )
+
+        quick = self._quick_search(query=query, limit=20)
+        panorama = self._panorama_search(query=query, include_expired=True, limit=30)
+
+        entity_insights = []
+        for node in panorama.all_nodes[:10]:
+            entity_type = next((label for label in node.labels if label not in ["Entity", "Node"]), "Entity")
+            entity_insights.append({
+                "name": node.name,
+                "type": entity_type,
+                "summary": node.summary,
+                "related_facts": []
+            })
+
+        relationship_chains = []
+        for edge in panorama.all_edges[:15]:
+            source = edge.source_node_name or edge.source_node_uuid
+            target = edge.target_node_name or edge.target_node_uuid
+            relationship_chains.append(f"{source} --[{edge.name}]--> {target}: {edge.fact}")
+
+        return InsightForgeResult(
+            query=query,
+            simulation_requirement=self.simulation_requirement,
+            sub_queries=[query],
+            semantic_facts=quick.facts,
+            entity_insights=entity_insights,
+            relationship_chains=relationship_chains,
+            total_facts=len(quick.facts),
+            total_entities=len(entity_insights),
+            total_relationships=len(relationship_chains)
+        )
+
+    def _get_graph_statistics(self) -> Dict[str, Any]:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.get_graph_statistics(self.graph_id)
+        return self._get_simulation_context(limit=10).get("graph_statistics", {})
+
+    def _get_entity_summary(self, entity_name: str) -> Dict[str, Any]:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.get_entity_summary(
+                graph_id=self.graph_id,
+                entity_name=entity_name
+            )
+
+        graph_data = {}
+        if hasattr(self.graph_store, "get_graph_data"):
+            graph_data = self.graph_store.get_graph_data(self.graph_id) or {}
+        nodes = graph_data.get("nodes", [])
+        target = None
+        for node in nodes:
+            if entity_name.lower() in (node.get("name", "").lower()):
+                target = node
+                break
+        if not target and nodes:
+            target = nodes[0]
+        if not target:
+            return {"name": entity_name, "summary": "", "related_facts": [], "related_nodes": []}
+
+        neighbors = self.graph_store.get_neighbors(self.graph_id, target.get("entity_id"), limit=12)
+        related_facts = self.graph_store.search_facts(self.graph_id, target.get("name", ""), limit=12)
+        labels = target.get("labels", []) or []
+        entity_type = next((label for label in labels if label not in ["Entity", "Node"]), "Entity")
+        return {
+            "name": target.get("name", entity_name),
+            "type": entity_type,
+            "summary": target.get("summary", ""),
+            "related_facts": related_facts,
+            "related_nodes": neighbors
+        }
+
+    def _get_entities_by_type(self, entity_type: str) -> List[NodeInfo]:
+        if self.graph_provider != "neo4j" or not self.graph_store:
+            return self.zep_tools.get_entities_by_type(
+                graph_id=self.graph_id,
+                entity_type=entity_type
+            )
+
+        graph_data = {}
+        if hasattr(self.graph_store, "get_graph_data"):
+            graph_data = self.graph_store.get_graph_data(self.graph_id) or {}
+        nodes = graph_data.get("nodes", [])
+        matched = []
+        for node in nodes:
+            labels = node.get("labels", []) or []
+            if entity_type in labels:
+                matched.append(
+                    NodeInfo(
+                        uuid=node.get("uuid") or node.get("entity_id") or "",
+                        name=node.get("name") or "",
+                        labels=labels,
+                        summary=node.get("summary") or "",
+                        attributes=node.get("attributes") or {}
+                    )
+                )
+        return matched
     
     def _define_tools(self) -> Dict[str, Dict[str, Any]]:
         """定义可用工具"""
@@ -971,10 +1220,8 @@ class ReportAgent:
             if tool_name == "insight_forge":
                 query = parameters.get("query", "")
                 ctx = parameters.get("report_context", "") or report_context
-                result = self.zep_tools.insight_forge(
-                    graph_id=self.graph_id,
+                result = self._insight_forge(
                     query=query,
-                    simulation_requirement=self.simulation_requirement,
                     report_context=ctx
                 )
                 return result.to_text()
@@ -985,8 +1232,7 @@ class ReportAgent:
                 include_expired = parameters.get("include_expired", True)
                 if isinstance(include_expired, str):
                     include_expired = include_expired.lower() in ['true', '1', 'yes']
-                result = self.zep_tools.panorama_search(
-                    graph_id=self.graph_id,
+                result = self._panorama_search(
                     query=query,
                     include_expired=include_expired
                 )
@@ -998,8 +1244,7 @@ class ReportAgent:
                 limit = parameters.get("limit", 10)
                 if isinstance(limit, str):
                     limit = int(limit)
-                result = self.zep_tools.quick_search(
-                    graph_id=self.graph_id,
+                result = self._quick_search(
                     query=query,
                     limit=limit
                 )
@@ -1028,15 +1273,12 @@ class ReportAgent:
                 return self._execute_tool("quick_search", parameters, report_context)
             
             elif tool_name == "get_graph_statistics":
-                result = self.zep_tools.get_graph_statistics(self.graph_id)
+                result = self._get_graph_statistics()
                 return json.dumps(result, ensure_ascii=False, indent=2)
             
             elif tool_name == "get_entity_summary":
                 entity_name = parameters.get("entity_name", "")
-                result = self.zep_tools.get_entity_summary(
-                    graph_id=self.graph_id,
-                    entity_name=entity_name
-                )
+                result = self._get_entity_summary(entity_name=entity_name)
                 return json.dumps(result, ensure_ascii=False, indent=2)
             
             elif tool_name == "get_simulation_context":
@@ -1047,10 +1289,7 @@ class ReportAgent:
             
             elif tool_name == "get_entities_by_type":
                 entity_type = parameters.get("entity_type", "")
-                nodes = self.zep_tools.get_entities_by_type(
-                    graph_id=self.graph_id,
-                    entity_type=entity_type
-                )
+                nodes = self._get_entities_by_type(entity_type=entity_type)
                 result = [n.to_dict() for n in nodes]
                 return json.dumps(result, ensure_ascii=False, indent=2)
             
@@ -1155,10 +1394,7 @@ class ReportAgent:
             progress_callback("planning", 0, t('progress.analyzingRequirements'))
         
         # 首先获取模拟上下文
-        context = self.zep_tools.get_simulation_context(
-            graph_id=self.graph_id,
-            simulation_requirement=self.simulation_requirement
-        )
+        context = self._get_simulation_context()
         
         if progress_callback:
             progress_callback("planning", 30, t('progress.generatingOutline'))

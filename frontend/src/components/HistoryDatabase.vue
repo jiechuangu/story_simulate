@@ -290,21 +290,19 @@ const getCardStyle = (index) => {
   }
 }
 
-// 根据轮数进度获取样式类
+// 根据 simulation 当前阶段获取样式类
 const getProgressClass = (simulation) => {
+  const status = simulation.status || simulation.effective_status || simulation.runner_status
+  if (status === 'interrupted') return 'failed'
+  if (status === 'failed') return 'failed'
+  if (['preparing', 'processing', 'running', 'paused'].includes(status)) return 'in-progress'
+  if (status === 'completed' || status === 'ready' || simulation.report_id) return 'completed'
+
   const current = simulation.current_round || 0
   const total = simulation.total_rounds || 0
-  
-  if (total === 0 || current === 0) {
-    // 未开始
-    return 'not-started'
-  } else if (current >= total) {
-    // 已完成
-    return 'completed'
-  } else {
-    // 进行中
-    return 'in-progress'
-  }
+  if (total === 0 || current === 0) return 'not-started'
+  if (current >= total) return 'completed'
+  return 'in-progress'
 }
 
 // 格式化日期（只显示日期部分）
@@ -351,8 +349,18 @@ const formatSimulationId = (simulationId) => {
   return `SIM_${prefix.toUpperCase()}`
 }
 
-// 格式化轮数显示（当前轮/总轮数）
+// 格式化 simulation 当前阶段显示
 const formatRounds = (simulation) => {
+  const status = simulation.status || simulation.effective_status || simulation.runner_status
+  if (status === 'interrupted') {
+    return `Interrupted · ${simulation.profiles_count || 0}/${simulation.entities_count || '?'} personas`
+  }
+  if (status === 'preparing' || status === 'processing') {
+    return `Preparing · ${simulation.profiles_count || 0}/${simulation.entities_count || '?'} personas`
+  }
+  if (status === 'ready') return 'Ready'
+  if (status === 'failed') return 'Failed'
+
   const current = simulation.current_round || 0
   const total = simulation.total_rounds || 0
   if (total === 0) return t('history.notStarted')

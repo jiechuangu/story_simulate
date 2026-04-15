@@ -49,12 +49,11 @@
         />
       </div>
 
-      <!-- Right Panel: Step5 深度互动 -->
+      <!-- Right Panel: Step5 角色中心 -->
       <div class="panel-wrapper right" :style="rightPanelStyle">
-        <Step5Interaction
-          :reportId="currentReportId"
+        <CharacterHub
           :simulationId="simulationId"
-          :systemLogs="systemLogs"
+          :reportId="currentReportId"
           @add-log="addLog"
           @update-status="updateStatus"
         />
@@ -68,7 +67,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import GraphPanel from '../components/GraphPanel.vue'
-import Step5Interaction from '../components/Step5Interaction.vue'
+import CharacterHub from '../components/CharacterHub.vue'
 import { getProject, getGraphData } from '../api/graph'
 import { getSimulation } from '../api/simulation'
 import { getReport } from '../api/report'

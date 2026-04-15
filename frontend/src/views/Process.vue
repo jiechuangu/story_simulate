@@ -414,7 +414,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { generateOntology, getProject, buildGraph, getTaskStatus, getGraphData } from '../api/graph'
+import { generateOntology, getProject, buildGraph, getTaskStatus, getGraphData, listProjects } from '../api/graph'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
 import * as d3 from 'd3'
 
@@ -442,6 +442,7 @@ const graphSvg = ref(null)
 
 // 轮询定时器
 let pollTimer = null
+let ontologyPollTimer = null
 
 // 计算属性
 const statusClass = computed(() => {
@@ -555,12 +556,37 @@ const initProject = async () => {
   const paramProjectId = route.params.projectId
   
   if (paramProjectId === 'new') {
-    // 新建项目：从 store 获取待上传的数据
-    await handleNewProject()
+    const pending = getPendingUpload()
+    if (pending.isPending && pending.files.length > 0) {
+      await handleNewProject()
+      return
+    }
+
+    const latest = await findLatestRecoverableProject()
+    if (latest) {
+      currentProjectId.value = latest.project_id
+      await router.replace({ name: 'Process', params: { projectId: latest.project_id } })
+      await loadProject()
+      return
+    }
+
+    error.value = '当前没有可恢复的任务，请返回首页重新发起'
   } else {
     // 加载已有项目
     currentProjectId.value = paramProjectId
     await loadProject()
+  }
+}
+
+const findLatestRecoverableProject = async () => {
+  try {
+    const response = await listProjects(10)
+    if (!response.success) return null
+    return response.data.find(project =>
+      ['ontology_generated', 'graph_building', 'graph_completed'].includes(project.status)
+    ) || null
+  } catch {
+    return null
   }
 }
 
@@ -576,6 +602,7 @@ const handleNewProject = async () => {
   
   try {
     loading.value = true
+    error.value = ''
     currentPhase.value = 0 // 本体生成阶段
     ontologyProgress.value = { message: '正在上传文件并分析文档...' }
     
@@ -590,23 +617,22 @@ const handleNewProject = async () => {
     const response = await generateOntology(formDataObj)
     
     if (response.success) {
-      // 清除待上传数据
-      clearPendingUpload()
-      
-      // 更新项目ID和数据
       currentProjectId.value = response.data.project_id
-      projectData.value = response.data
-      
-      // 更新URL（不刷新页面）
-      router.replace({
+      projectData.value = {
+        project_id: response.data.project_id,
+        name: response.data.project_name,
+        files: response.data.files,
+        total_text_length: response.data.total_text_length,
+        status: response.data.status,
+        ontology_task_id: response.data.task_id,
+        simulation_requirement: pending.simulationRequirement
+      }
+      await router.replace({
         name: 'Process',
         params: { projectId: response.data.project_id }
       })
-      
-      ontologyProgress.value = null
-      
-      // 自动开始图谱构建
-      await startBuildGraph()
+      clearPendingUpload()
+      startOntologyPolling(response.data.task_id)
     } else {
       error.value = response.error || '本体生成失败'
     }
@@ -622,6 +648,7 @@ const handleNewProject = async () => {
 const loadProject = async () => {
   try {
     loading.value = true
+    error.value = ''
     const response = await getProject(currentProjectId.value)
     
     if (response.success) {
@@ -631,6 +658,12 @@ const loadProject = async () => {
       // 自动开始图谱构建
       if (response.data.status === 'ontology_generated' && !response.data.graph_id) {
         await startBuildGraph()
+      }
+
+      if (response.data.status === 'ontology_generating' && response.data.ontology_task_id) {
+        currentPhase.value = 0
+        ontologyProgress.value = { message: '本体生成中...' }
+        startOntologyPolling(response.data.ontology_task_id)
       }
       
       // 继续轮询构建中的任务
@@ -658,6 +691,7 @@ const loadProject = async () => {
 const updatePhaseByStatus = (status) => {
   switch (status) {
     case 'created':
+    case 'ontology_generating':
     case 'ontology_generated':
       currentPhase.value = 0
       break
@@ -673,10 +707,50 @@ const updatePhaseByStatus = (status) => {
   }
 }
 
+const startOntologyPolling = (taskId) => {
+  stopOntologyPolling()
+  pollOntologyStatus(taskId)
+  ontologyPollTimer = setInterval(() => {
+    pollOntologyStatus(taskId)
+  }, 2000)
+}
+
+const pollOntologyStatus = async (taskId) => {
+  try {
+    const response = await getTaskStatus(taskId)
+    if (!response.success) return
+    const task = response.data
+    ontologyProgress.value = {
+      message: task.message || '本体生成中...',
+      progress: task.progress || 0
+    }
+
+    if (task.status === 'completed') {
+      stopOntologyPolling()
+      ontologyProgress.value = null
+      await loadProject()
+    } else if (task.status === 'failed') {
+      stopOntologyPolling()
+      error.value = '本体生成失败: ' + (task.error || '未知错误')
+      ontologyProgress.value = null
+    }
+  } catch (err) {
+    console.error('Poll ontology error:', err)
+  }
+}
+
+const stopOntologyPolling = () => {
+  if (ontologyPollTimer) {
+    clearInterval(ontologyPollTimer)
+    ontologyPollTimer = null
+  }
+}
+
 // 开始构建图谱
 const startBuildGraph = async () => {
   try {
     currentPhase.value = 1
+    error.value = ''
     // 设置初始进度
     buildProgress.value = {
       progress: 0,
@@ -1087,6 +1161,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling()
   stopGraphPolling()
+  stopOntologyPolling()
 })
 </script>
 
