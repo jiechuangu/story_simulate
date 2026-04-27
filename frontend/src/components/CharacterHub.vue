@@ -66,7 +66,7 @@ import { bootstrapWorld, createWorldCharacter } from '../api/world'
 
 const props = defineProps({
   simulationId: String,
-  reportId: String
+  storyId: String
 })
 
 const emit = defineEmits(['add-log', 'update-status'])
@@ -135,7 +135,7 @@ const loadWorld = async () => {
 }
 
 const openRoleControl = (characterId) => {
-  router.push({ name: 'RoleIntro', params: { reportId: props.reportId, characterId } })
+  router.push({ name: 'RoleIntro', params: { storyId: props.storyId, characterId } })
 }
 
 const addCharacter = async () => {

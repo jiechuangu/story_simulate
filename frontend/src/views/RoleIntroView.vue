@@ -43,13 +43,13 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getReport } from '../api/report'
+import { getStorySession } from '../api/story'
 import { bootstrapWorld, createWorldImageTask, listWorldImageTasks, fetchWorldIntroPlan } from '../api/world'
 
 const route = useRoute()
 const router = useRouter()
 
-const reportId = route.params.reportId
+const storyId = route.params.storyId
 const characterId = route.params.characterId
 
 const ready = ref(false)
@@ -65,11 +65,11 @@ const currentSlide = computed(() => slides.value[currentIndex.value] || null)
 const totalSlides = computed(() => Math.max(1, slides.value.length))
 
 const goBack = () => {
-  router.push({ name: 'Interaction', params: { reportId } })
+  router.push({ name: 'Interaction', params: { storyId } })
 }
 
 const enterStep6 = () => {
-  router.push({ name: 'RoleControl', params: { reportId, characterId } })
+  router.push({ name: 'RoleControl', params: { storyId, characterId } })
 }
 
 const pickCharacter = () => {
@@ -189,8 +189,8 @@ const prevSlide = () => {
 
 onMounted(async () => {
   try {
-    const reportRes = await getReport(reportId)
-    simulationId.value = reportRes?.data?.simulation_id || ''
+    const storyRes = await getStorySession(storyId)
+    simulationId.value = storyRes?.data?.simulation_id || ''
     if (!simulationId.value) return
 
     const worldRes = await bootstrapWorld({ simulation_id: simulationId.value })

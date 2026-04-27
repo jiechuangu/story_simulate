@@ -51,8 +51,8 @@
 
       <!-- Right Panel: Step4 报告生成 -->
       <div class="panel-wrapper right" :style="rightPanelStyle">
-        <Step4Report
-          :reportId="currentReportId"
+        <Step4Story
+          :storyId="currentStoryId"
           :simulationId="simulationId"
           :systemLogs="systemLogs"
           @add-log="addLog"
@@ -68,10 +68,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import GraphPanel from '../components/GraphPanel.vue'
-import Step4Report from '../components/Step4Report.vue'
+import Step4Story from '../components/Step4Story.vue'
 import { getProject, getGraphData } from '../api/graph'
 import { getSimulation } from '../api/simulation'
-import { getReport } from '../api/report'
+import { getStorySession } from '../api/story'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 
 const route = useRoute()
@@ -80,14 +80,14 @@ const { t } = useI18n()
 
 // Props
 const props = defineProps({
-  reportId: String
+  storyId: String
 })
 
 // Layout State - 默认切换到工作台视角
 const viewMode = ref('workbench')
 
 // Data State
-const currentReportId = ref(route.params.reportId)
+const currentStoryId = ref(route.params.storyId)
 const simulationId = ref(null)
 const projectData = ref(null)
 const graphData = ref(null)
@@ -142,15 +142,15 @@ const toggleMaximize = (target) => {
 }
 
 // --- Data Logic ---
-const loadReportData = async () => {
+const loadStorySessionData = async () => {
   try {
-    addLog(t('log.loadReportData', { id: currentReportId.value }))
+    addLog(`Loading story session: ${currentStoryId.value}`)
 
     // 获取 report 信息以获取 simulation_id
-    const reportRes = await getReport(currentReportId.value)
-    if (reportRes.success && reportRes.data) {
-      const reportData = reportRes.data
-      simulationId.value = reportData.simulation_id
+    const storyRes = await getStorySession(currentStoryId.value)
+    if (storyRes.success && storyRes.data) {
+      const storyData = storyRes.data
+      simulationId.value = storyData.simulation_id
 
       if (simulationId.value) {
         // 获取 simulation 信息
@@ -174,10 +174,10 @@ const loadReportData = async () => {
         }
       }
     } else {
-      addLog(t('log.getReportInfoFailed', { error: reportRes.error || t('common.unknownError') }))
+      addLog(`Load story session failed: ${storyRes.error || t('common.unknownError')}`)
     }
   } catch (err) {
-    addLog(t('log.loadException', { error: err.message }))
+    addLog(`Load story session failed: ${err.message}`)
   }
 }
 
@@ -204,16 +204,16 @@ const refreshGraph = () => {
 }
 
 // Watch route params
-watch(() => route.params.reportId, (newId) => {
-  if (newId && newId !== currentReportId.value) {
-    currentReportId.value = newId
-    loadReportData()
+watch(() => route.params.storyId, (newId) => {
+  if (newId && newId !== currentStoryId.value) {
+    currentStoryId.value = newId
+    loadStorySessionData()
   }
 }, { immediate: true })
 
 onMounted(() => {
-  addLog(t('log.reportViewInit'))
-  loadReportData()
+  addLog('Story chapter workspace ready')
+  loadStorySessionData()
 })
 </script>
 

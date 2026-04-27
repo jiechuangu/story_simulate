@@ -295,7 +295,7 @@ import {
   getRunStatus,
   getRunStatusDetail
 } from '../api/simulation'
-import { generateReport } from '../api/report'
+import { createStorySession } from '../api/story'
 
 const { t } = useI18n()
 
@@ -656,17 +656,17 @@ const handleNextStep = async () => {
   addLog(t('log.startingReportGen'))
   
   try {
-    const res = await generateReport({
+    const res = await createStorySession({
       simulation_id: props.simulationId,
       force_regenerate: true
     })
     
     if (res.success && res.data) {
-      const reportId = res.data.report_id
-      addLog(t('log.reportGenTaskStarted', { reportId }))
+      const storyId = res.data.report_id
+      addLog(`Story session started: ${storyId}`)
       
       // 跳转到报告页面
-      router.push({ name: 'Report', params: { reportId } })
+      router.push({ name: 'Story', params: { storyId } })
     } else {
       addLog(t('log.reportGenFailed', { error: res.error || t('common.unknownError') }))
       isGeneratingReport.value = false

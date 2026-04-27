@@ -67,7 +67,7 @@ import GraphPanel from '../components/GraphPanel.vue'
 import WorldWorkbench from '../components/WorldWorkbench.vue'
 import { getProject, getGraphData } from '../api/graph'
 import { getSimulation } from '../api/simulation'
-import { getReport } from '../api/report'
+import { getStorySession } from '../api/story'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 
 const route = useRoute()
@@ -75,7 +75,7 @@ const router = useRouter()
 const { t } = useI18n()
 
 const viewMode = ref('workbench')
-const currentReportId = ref(route.params.reportId)
+const currentStoryId = ref(route.params.storyId)
 const currentCharacterId = ref(route.params.characterId)
 const simulationId = ref(null)
 const projectData = ref(null)
@@ -113,14 +113,14 @@ const addLog = (msg) => {
 const updateStatus = (status) => { currentStatus.value = status }
 const toggleMaximize = (target) => { viewMode.value = viewMode.value === target ? 'split' : target }
 const goToStep5 = () => {
-  router.push({ name: 'Interaction', params: { reportId: currentReportId.value } })
+  router.push({ name: 'Interaction', params: { storyId: currentStoryId.value } })
 }
 
-const loadReportData = async () => {
+const loadStorySessionData = async () => {
   try {
-    const reportRes = await getReport(currentReportId.value)
-    if (!(reportRes.success && reportRes.data)) return
-    simulationId.value = reportRes.data.simulation_id
+    const storyRes = await getStorySession(currentStoryId.value)
+    if (!(storyRes.success && storyRes.data)) return
+    simulationId.value = storyRes.data.simulation_id
     if (!simulationId.value) return
 
     const simRes = await getSimulation(simulationId.value)
@@ -149,10 +149,10 @@ const refreshGraph = () => {
   if (projectData.value?.graph_id) loadGraph(projectData.value.graph_id)
 }
 
-watch(() => route.params.reportId, (newId) => {
-  if (newId && newId !== currentReportId.value) {
-    currentReportId.value = newId
-    loadReportData()
+watch(() => route.params.storyId, (newId) => {
+  if (newId && newId !== currentStoryId.value) {
+    currentStoryId.value = newId
+    loadStorySessionData()
   }
 }, { immediate: true })
 
@@ -162,7 +162,7 @@ watch(() => route.params.characterId, (newId) => {
 
 onMounted(() => {
   addLog('Role control initialized')
-  loadReportData()
+  loadStorySessionData()
 })
 </script>
 
