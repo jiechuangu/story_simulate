@@ -2,14 +2,14 @@
   <div class="interaction-panel">
     <!-- Main Split Layout -->
     <div class="main-split-layout">
-      <!-- LEFT PANEL: Report Style -->
+      <!-- LEFT PANEL: Story Session -->
       <div class="left-panel report-style" ref="leftPanel">
         <div v-if="reportOutline" class="report-content-wrapper">
-          <!-- Report Header -->
+          <!-- Story Header -->
           <div class="report-header-block">
             <div class="report-meta">
-              <span class="report-tag">Prediction Report</span>
-              <span class="report-id">ID: {{ reportId || 'REF-2024-X92' }}</span>
+              <span class="report-tag">Story Session</span>
+              <span class="report-id">ID: {{ storyId || 'STORY-X92' }}</span>
             </div>
             <h1 class="main-title">{{ reportOutline.title }}</h1>
             <p class="sub-title">{{ reportOutline.summary }}</p>
@@ -72,7 +72,7 @@
             <div class="waiting-ring"></div>
             <div class="waiting-ring"></div>
           </div>
-          <span class="waiting-text">Waiting for Report Agent...</span>
+          <span class="waiting-text">Waiting for Story Guide...</span>
         </div>
       </div>
 
@@ -149,7 +149,7 @@
         <!-- Chat Mode -->
         <div v-if="activeTab === 'chat'" class="chat-container">
 
-          <!-- Report Agent Tools Card -->
+          <!-- Story Guide Tools Card -->
           <div v-if="chatTarget === 'report_agent'" class="report-agent-tools-card">
             <div class="tools-card-header">
               <div class="tools-card-avatar">R</div>
@@ -266,7 +266,7 @@
               <div class="message-content">
                 <div class="message-header">
                   <span class="sender-name">
-                    {{ msg.role === 'user' ? 'You' : (chatTarget === 'report_agent' ? 'Report Agent' : (selectedAgent?.username || 'Agent')) }}
+                    {{ msg.role === 'user' ? 'You' : (chatTarget === 'report_agent' ? 'Story Guide' : (selectedAgent?.username || 'Agent')) }}
                   </span>
                   <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
                 </div>
@@ -413,13 +413,13 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { chatWithReport, getReport, getAgentLog } from '../api/report'
+import { chatWithStoryGuide, getStorySession, getStoryLogs } from '../api/story'
 import { interviewAgents, getSimulationProfilesRealtime } from '../api/simulation'
 
 const { t } = useI18n()
 
 const props = defineProps({
-  reportId: String,
+  storyId: String,
   simulationId: String
 })
 
@@ -508,7 +508,7 @@ const selectReportAgentChat = () => {
   selectedAgentIndex.value = null
   showAgentDropdown.value = false
   
-  // 恢复 Report Agent 的对话记录
+  // 恢复 Story Guide 的对话记录
   chatHistory.value = chatHistoryCache.value['report_agent'] || []
 }
 
@@ -691,7 +691,7 @@ const sendToReportAgent = async (message) => {
       content: msg.content
     }))
   
-  const res = await chatWithReport({
+  const res = await chatWithStoryGuide({
     simulation_id: props.simulationId,
     message: message,
     chat_history: historyForApi
@@ -873,13 +873,12 @@ const submitSurvey = async () => {
 
 // Load Report Data
 const loadReportData = async () => {
-  if (!props.reportId) return
+  if (!props.storyId) return
   
   try {
-    addLog(t('log.loadReportData', { id: props.reportId }))
+    addLog(`Loading story session: ${props.storyId}`)
     
-    // Get report info
-    const reportRes = await getReport(props.reportId)
+    const reportRes = await getStorySession(props.storyId)
     if (reportRes.success && reportRes.data) {
       // Load agent logs to get report outline and sections
       await loadAgentLogs()
@@ -890,10 +889,10 @@ const loadReportData = async () => {
 }
 
 const loadAgentLogs = async () => {
-  if (!props.reportId) return
+  if (!props.storyId) return
   
   try {
-    const res = await getAgentLog(props.reportId, 0)
+    const res = await getStoryLogs(props.storyId, 0)
     if (res.success && res.data) {
       const logs = res.data.logs || []
       
@@ -948,7 +947,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 
-watch(() => props.reportId, (newId) => {
+watch(() => props.storyId, (newId) => {
   if (newId) {
     loadReportData()
   }
@@ -983,7 +982,7 @@ watch(() => props.simulationId, (newId) => {
   overflow: hidden;
 }
 
-/* Left Panel - Report Style (与 Step4Report.vue 完全一致) */
+/* Left Panel - Story Style */
 .left-panel.report-style {
   width: 45%;
   min-width: 450px;

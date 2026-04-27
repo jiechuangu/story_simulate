@@ -33,7 +33,7 @@
           {{ statusText }}
         </span>
         <div class="step-actions">
-          <button class="step-action-btn" @click="openStep4Report">Step 4</button>
+          <button class="step-action-btn" @click="openStep4Story">Step 4</button>
           <button class="step-action-btn" @click="openStep5Interaction">Step 5</button>
         </div>
       </div>
@@ -72,7 +72,7 @@ import GraphPanel from '../components/GraphPanel.vue'
 import WorldWorkbench from '../components/WorldWorkbench.vue'
 import { getProject, getGraphData } from '../api/graph'
 import { getSimulation, getSimulationConfig, stopSimulation, closeSimulationEnv, getEnvStatus } from '../api/simulation'
-import { generateReport, getReportBySimulation } from '../api/report'
+import { createStorySession, getStorySessionBySimulation } from '../api/story'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -98,7 +98,7 @@ const graphData = ref(null)
 const graphLoading = ref(false)
 const systemLogs = ref([])
 const currentStatus = ref('processing') // processing | completed | error
-const activeReportId = ref(null)
+const activeStoryId = ref(null)
 
 // --- Computed Layout Styles ---
 const leftPanelStyle = computed(() => {
@@ -139,15 +139,15 @@ const updateStatus = (status) => {
   currentStatus.value = status
 }
 
-const ensureReportForNavigation = async () => {
+const ensureStoryForNavigation = async () => {
   if (!currentSimulationId.value) {
     throw new Error('Missing simulation id')
   }
 
   try {
-    const existingRes = await getReportBySimulation(currentSimulationId.value)
+    const existingRes = await getStorySessionBySimulation(currentSimulationId.value)
     if (existingRes.success && existingRes.data?.report_id) {
-      activeReportId.value = existingRes.data.report_id
+      activeStoryId.value = existingRes.data.report_id
       return existingRes.data.report_id
     }
   } catch (err) {
@@ -158,21 +158,21 @@ const ensureReportForNavigation = async () => {
     }
   }
 
-  addLog('No report found. Starting report generation...')
-  const generateRes = await generateReport({ simulation_id: currentSimulationId.value })
+  addLog('No story session found. Starting chapter generation...')
+  const generateRes = await createStorySession({ simulation_id: currentSimulationId.value })
   if (generateRes.success && generateRes.data?.report_id) {
-    activeReportId.value = generateRes.data.report_id
-    addLog(`Report task started: ${generateRes.data.report_id}`)
+    activeStoryId.value = generateRes.data.report_id
+    addLog(`Story session started: ${generateRes.data.report_id}`)
     return generateRes.data.report_id
   }
 
-  throw new Error(generateRes.error || 'Failed to start report generation')
+  throw new Error(generateRes.error || 'Failed to start story session')
 }
 
-const openStep4Report = async () => {
+const openStep4Story = async () => {
   try {
-    const reportId = await ensureReportForNavigation()
-    router.push({ name: 'Report', params: { reportId } })
+    const storyId = await ensureStoryForNavigation()
+    router.push({ name: 'Story', params: { storyId } })
   } catch (err) {
     addLog(`Open Step 4 failed: ${err.message}`)
   }
@@ -180,8 +180,8 @@ const openStep4Report = async () => {
 
 const openStep5Interaction = async () => {
   try {
-    const reportId = await ensureReportForNavigation()
-    router.push({ name: 'Interaction', params: { reportId } })
+    const storyId = await ensureStoryForNavigation()
+    router.push({ name: 'Interaction', params: { storyId } })
   } catch (err) {
     addLog(`Open Step 5 failed: ${err.message}`)
   }

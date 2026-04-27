@@ -3,7 +3,7 @@ import Home from '../views/Home.vue'
 import Process from '../views/MainView.vue'
 import SimulationView from '../views/SimulationView.vue'
 import SimulationRunView from '../views/SimulationRunView.vue'
-import ReportView from '../views/ReportView.vue'
+import StoryView from '../views/StoryView.vue'
 import InteractionView from '../views/InteractionView.vue'
 import RoleControlView from '../views/RoleControlView.vue'
 import RoleIntroView from '../views/RoleIntroView.vue'
@@ -33,25 +33,25 @@ const routes = [
     props: true
   },
   {
-    path: '/report/:reportId',
-    name: 'Report',
-    component: ReportView,
+    path: '/story/:storyId',
+    name: 'Story',
+    component: StoryView,
     props: true
   },
   {
-    path: '/interaction/:reportId',
+    path: '/interaction/:storyId',
     name: 'Interaction',
     component: InteractionView,
     props: true
   },
   {
-    path: '/interaction/:reportId/role/:characterId',
+    path: '/interaction/:storyId/role/:characterId',
     name: 'RoleControl',
     component: RoleControlView,
     props: true
   },
   {
-    path: '/interaction/:reportId/role/:characterId/intro',
+    path: '/interaction/:storyId/role/:characterId/intro',
     name: 'RoleIntro',
     component: RoleIntroView,
     props: true

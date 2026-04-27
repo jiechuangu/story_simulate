@@ -1,27 +1,27 @@
 <template>
   <section class="report-history">
     <div class="header">
-      <span class="title">Recent Reports</span>
-      <span class="meta">{{ reports.length }} items</span>
+      <span class="title">Recent Story Sessions</span>
+      <span class="meta">{{ sessions.length }} items</span>
     </div>
     <div v-if="loading" class="empty">Loading...</div>
-    <div v-else-if="reports.length === 0" class="empty">No reports yet.</div>
+    <div v-else-if="sessions.length === 0" class="empty">No story sessions yet.</div>
     <div v-else class="list">
       <button
-        v-for="report in reports"
-        :key="report.report_id"
+        v-for="session in sessions"
+        :key="session.report_id"
         class="item"
-        @click="openReport(report.report_id)"
+        @click="openStorySession(session.report_id)"
       >
         <div class="row">
-          <span class="id">{{ report.report_id }}</span>
-          <span class="status" :class="report.status">{{ report.status }}</span>
+          <span class="id">{{ session.report_id }}</span>
+          <span class="status" :class="session.status">{{ session.status }}</span>
         </div>
-        <div class="name">{{ report.outline?.title || 'Untitled Report' }}</div>
-        <div class="desc">{{ truncate(report.simulation_requirement || '-', 80) }}</div>
+        <div class="name">{{ session.title || session.outline?.title || 'Untitled Story' }}</div>
+        <div class="desc">{{ truncate(session.simulation_requirement || session.premise || '-', 80) }}</div>
         <div class="meta-row">
-          <span>{{ report.simulation_id || '--' }}</span>
-          <span>{{ formatDate(report.created_at) }}</span>
+          <span>{{ session.simulation_id || '--' }}</span>
+          <span>{{ formatDate(session.created_at) }}</span>
         </div>
       </button>
     </div>
@@ -31,35 +31,35 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { listReports } from '../api/report'
+import { listStorySessions } from '../api/story'
 
 const router = useRouter()
-const reports = ref([])
+const sessions = ref([])
 const loading = ref(true)
 let timer = null
 
-const loadReports = async () => {
+const loadStorySessions = async () => {
   try {
     loading.value = true
-    const res = await listReports(12)
+    const res = await listStorySessions(12)
     if (res.success) {
-      reports.value = res.data || []
+      sessions.value = res.data || []
     }
   } finally {
     loading.value = false
   }
 }
 
-const openReport = (reportId) => {
-  router.push({ name: 'Report', params: { reportId } })
+const openStorySession = (storyId) => {
+  router.push({ name: 'Story', params: { storyId } })
 }
 
 const truncate = (text, max) => text.length > max ? `${text.slice(0, max)}...` : text
 const formatDate = (value) => value ? new Date(value).toLocaleString() : '--'
 
 onMounted(() => {
-  loadReports()
-  timer = setInterval(loadReports, 8000)
+  loadStorySessions()
+  timer = setInterval(loadStorySessions, 8000)
 })
 
 onUnmounted(() => {
