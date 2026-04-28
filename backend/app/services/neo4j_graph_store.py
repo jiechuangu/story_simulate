@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ServiceUnavailable
 
 from ..config import Config
 from .graph_store import GraphStore
@@ -35,6 +36,34 @@ class Neo4jGraphStore(GraphStore):
             self.uri,
             auth=(self.username, self.password),
         )
+        self._verify_or_fallback()
+
+    def _verify_or_fallback(self) -> None:
+        try:
+            self.driver.verify_connectivity()
+        except Exception as exc:
+            fallback_uri = self._build_ssl_relaxed_uri(self.uri)
+            if not fallback_uri or fallback_uri == self.uri:
+                raise
+            try:
+                self.driver.close()
+            except Exception:
+                pass
+            self.uri = fallback_uri
+            self.driver = GraphDatabase.driver(
+                self.uri,
+                auth=(self.username, self.password),
+            )
+            self.driver.verify_connectivity()
+
+    def _build_ssl_relaxed_uri(self, uri: str) -> Optional[str]:
+        if not uri:
+            return None
+        if uri.startswith("neo4j+s://"):
+            return uri.replace("neo4j+s://", "neo4j+ssc://", 1)
+        if uri.startswith("bolt+s://"):
+            return uri.replace("bolt+s://", "bolt+ssc://", 1)
+        return None
 
     def create_graph(self, name: str, description: str = "") -> str:
         graph_id = f"mirofish_{uuid.uuid4().hex[:16]}"

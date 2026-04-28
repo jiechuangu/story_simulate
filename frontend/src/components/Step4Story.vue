@@ -8,9 +8,75 @@
       </div>
       <div class="header-actions">
         <span class="status-pill" :class="statusClass">{{ statusLabel }}</span>
-        <button class="ghost-btn" :disabled="retrying" @click="restartStory">
-          {{ retrying ? 'Regenerating...' : 'Restart Story' }}
+        <button
+          v-if="latestChapter"
+          class="ghost-btn"
+          :disabled="retrying || isGenerating || !storySession"
+          @click="restartStory"
+        >
+          {{ retrying ? 'Regenerating...' : 'Regenerate Chapter' }}
         </button>
+      </div>
+    </section>
+
+    <section v-if="showBlueprint" class="blueprint-shell">
+      <div class="topic-header">
+        <div>
+          <div class="eyebrow">Blueprint</div>
+          <h3>Review the story setup before chapter generation</h3>
+        </div>
+      </div>
+
+      <div v-if="blueprint" class="blueprint-card">
+        <div class="blueprint-grid">
+          <div>
+            <div class="label">Summary</div>
+            <div>{{ blueprint.story_summary || storyPremise }}</div>
+          </div>
+          <div>
+            <div class="label">Conflict</div>
+            <div>{{ blueprint.core_conflict || 'Pending' }}</div>
+          </div>
+          <div>
+            <div class="label">Protagonist</div>
+            <div>{{ blueprint.protagonist?.name || 'Pending' }}</div>
+          </div>
+          <div>
+            <div class="label">Graph Bootstrap</div>
+            <div>{{ graphBootstrapText }}</div>
+          </div>
+        </div>
+
+        <div class="outline-box">
+          <pre>{{ outlineMarkdown }}</pre>
+        </div>
+
+        <div class="instruction-box">
+          <textarea
+            v-model="blueprintInstruction"
+            class="instruction-input"
+            placeholder="Optional: ask for a different direction, tone, or constraint"
+            rows="3"
+            :disabled="isGenerating || confirming"
+          ></textarea>
+        </div>
+
+        <div class="blueprint-actions">
+          <button class="ghost-btn" :disabled="isGenerating || confirming" @click="handleRegenerateBlueprint('')">
+            Regenerate Blueprint
+          </button>
+          <button class="ghost-btn" :disabled="isGenerating || confirming || !blueprintInstruction.trim()" @click="handleRegenerateBlueprint(blueprintInstruction)">
+            Regenerate With Input
+          </button>
+          <button class="primary-btn" :disabled="isGenerating || confirming" @click="handleConfirmBlueprint">
+            {{ confirming ? 'Generating Chapter 1...' : 'Accept Blueprint' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="chapter-card placeholder">
+        <div class="spinner"></div>
+        <p>Generating blueprint and ontology...</p>
       </div>
     </section>
 
@@ -26,12 +92,12 @@
       </article>
     </section>
 
-    <section v-else class="chapter-card placeholder">
+    <section v-else-if="!showBlueprint" class="chapter-card placeholder">
       <div class="spinner"></div>
       <p>Generating the current chapter...</p>
     </section>
 
-    <section class="topic-shell">
+    <section v-if="latestChapter" class="topic-shell">
       <div class="topic-header">
         <div>
           <div class="eyebrow">Next Chapter</div>
@@ -63,8 +129,8 @@
           </div>
           <h4>{{ topic.title }}</h4>
           <p>{{ topic.summary }}</p>
-          <div v-if="topic.focus_characters?.length" class="topic-characters">
-            {{ topic.focus_characters.join(' / ') }}
+          <div v-if="formatFocusCharacters(topic.focus_characters)" class="topic-characters">
+            {{ formatFocusCharacters(topic.focus_characters) }}
           </div>
         </button>
       </div>
@@ -74,7 +140,7 @@
       <div class="topic-header">
         <div>
           <div class="eyebrow">Progress</div>
-          <h3>Chapter Timeline</h3>
+          <h3>{{ latestChapter ? 'Chapter Timeline' : 'Blueprint State' }}</h3>
         </div>
       </div>
       <div v-if="chapters.length === 0" class="timeline-empty">No chapters yet.</div>
@@ -94,7 +160,13 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { createStorySession, createStorySessionFromSeed, getStorySession, selectNextTopic } from '../api/story'
+import {
+  confirmBlueprint,
+  getStorySession,
+  regenerateBlueprint,
+  restartCurrentChapter,
+  selectNextTopic
+} from '../api/story'
 
 const router = useRouter()
 
@@ -109,9 +181,15 @@ const emit = defineEmits(['add-log', 'update-status'])
 const storySession = ref(null)
 const selecting = ref(false)
 const retrying = ref(false)
+const confirming = ref(false)
+const blueprintInstruction = ref('')
 let pollTimer = null
 
 const log = (msg) => emit('add-log', msg)
+
+const showBlueprint = computed(() => {
+  return !!storySession.value && !latestChapter.value
+})
 
 const statusClass = computed(() => {
   if (!storySession.value) return 'processing'
@@ -123,8 +201,9 @@ const statusClass = computed(() => {
 const statusLabel = computed(() => {
   if (!storySession.value) return 'Loading'
   if (storySession.value.status === 'failed') return 'Error'
-  if (storySession.value.status === 'generating' || storySession.value.status === 'pending') return 'Generating'
-  return 'Waiting for Choice'
+  if (storySession.value.status === 'waiting_for_confirmation') return 'Review Blueprint'
+  if (storySession.value.status === 'waiting_for_choice') return 'Waiting for Choice'
+  return 'Generating'
 })
 
 const isGenerating = computed(() => {
@@ -140,6 +219,19 @@ const latestChapter = computed(() => {
   return list.length ? list[list.length - 1] : null
 })
 const topics = computed(() => storySession.value?.topic_candidates || [])
+const blueprint = computed(() => storySession.value?.blueprint || null)
+const outlineMarkdown = computed(() => storySession.value?.outline_markdown || 'No outline yet.')
+const graphBootstrapText = computed(() => {
+  const bootstrap = storySession.value?.graph_bootstrap || {}
+  if (!bootstrap.status) return 'Pending'
+  if (bootstrap.status === 'ready') {
+    return `Ready (${bootstrap.node_count || 0} nodes / ${bootstrap.edge_count || 0} edges)`
+  }
+  if (bootstrap.status === 'failed') {
+    return `Failed: ${bootstrap.error || 'unknown error'}`
+  }
+  return bootstrap.status
+})
 const canGoToInteraction = computed(() => !!props.storyId && !!latestChapter.value)
 
 const renderChapter = (text) => {
@@ -150,6 +242,20 @@ const renderChapter = (text) => {
     .join('')
 }
 
+const formatFocusCharacters = (value) => {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean).join(' / ')
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[、,]/)
+      .map(item => item.trim())
+      .filter(Boolean)
+      .join(' / ')
+  }
+  return ''
+}
+
 const refreshStorySession = async () => {
   if (!props.storyId) return
   try {
@@ -158,7 +264,7 @@ const refreshStorySession = async () => {
     if (storySession.value.status === 'failed') {
       emit('update-status', 'error')
       stopPolling()
-    } else if (storySession.value.status === 'waiting_for_choice') {
+    } else if (storySession.value.status === 'waiting_for_confirmation' || storySession.value.status === 'waiting_for_choice') {
       emit('update-status', 'completed')
       stopPolling()
     } else {
@@ -180,6 +286,44 @@ const stopPolling = () => {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
+  }
+}
+
+const handleConfirmBlueprint = async () => {
+  if (!props.storyId || confirming.value) return
+  confirming.value = true
+  emit('update-status', 'processing')
+  try {
+    log(`Blueprint accepted: ${props.storyId}`)
+    await confirmBlueprint(props.storyId)
+    if (storySession.value) {
+      storySession.value.status = 'generating'
+    }
+    startPolling()
+    await refreshStorySession()
+  } catch (err) {
+    log(`Confirm blueprint failed: ${err.message}`)
+    emit('update-status', 'error')
+  } finally {
+    confirming.value = false
+  }
+}
+
+const handleRegenerateBlueprint = async (instruction) => {
+  if (!props.storyId || isGenerating.value) return
+  emit('update-status', 'processing')
+  try {
+    log(`Regenerating blueprint${instruction ? `: ${instruction}` : ''}`)
+    await regenerateBlueprint(props.storyId, instruction ? { instruction } : {})
+    if (storySession.value) {
+      storySession.value.status = 'generating'
+    }
+    startPolling()
+    await refreshStorySession()
+    blueprintInstruction.value = ''
+  } catch (err) {
+    log(`Regenerate blueprint failed: ${err.message}`)
+    emit('update-status', 'error')
   }
 }
 
@@ -205,32 +349,21 @@ const pickTopic = async (topic) => {
 }
 
 const restartStory = async () => {
-  if (retrying.value) return
+  if (retrying.value || !props.storyId) return
   retrying.value = true
   try {
-    let res = null
-    if (props.simulationId) {
-      log(`Restarting story for simulation: ${props.simulationId}`)
-      res = await createStorySession({
-        simulation_id: props.simulationId,
-        force_regenerate: true
-      })
-    } else {
-      const seed = (storySession.value?.simulation_requirement || '').trim()
-      if (!seed) {
-        throw new Error('Missing story seed for restart')
-      }
-      log('Restarting story from current seed')
-      res = await createStorySessionFromSeed({ story_seed: seed })
+    log(`Regenerating current chapter: ${props.storyId}`)
+    await restartCurrentChapter(props.storyId)
+    if (storySession.value) {
+      storySession.value.status = 'generating'
+      storySession.value.topic_candidates = []
     }
-    const nextReportId = res.data?.report_id
-    if (!nextReportId) {
-      throw new Error('Failed to create a new story session')
-    }
-    stopPolling()
-    router.replace({ name: 'Story', params: { storyId: nextReportId } })
+    emit('update-status', 'processing')
+    startPolling()
+    await refreshStorySession()
   } catch (err) {
-    log(`Restart story failed: ${err.message}`)
+    log(`Regenerate chapter failed: ${err.message}`)
+    emit('update-status', 'error')
   } finally {
     retrying.value = false
   }
@@ -271,7 +404,8 @@ onUnmounted(() => {
 .story-header,
 .chapter-card,
 .topic-shell,
-.timeline-shell {
+.timeline-shell,
+.blueprint-shell {
   background: rgba(255, 251, 244, 0.92);
   border: 1px solid #e6dccd;
   border-radius: 20px;
@@ -306,188 +440,209 @@ onUnmounted(() => {
 .header-actions {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
 }
 .status-pill,
 .ghost-btn,
 .primary-btn,
 .topic-card {
   border-radius: 999px;
-  font: inherit;
 }
 .status-pill {
-  padding: 8px 12px;
-  background: #e9dfcf;
-  color: #5d5145;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
 }
-.status-pill.processing { background: #e7d9be; color: #6e5324; }
-.status-pill.ready { background: #d9eadf; color: #24523a; }
-.status-pill.error { background: #f2d5d5; color: #7a2424; }
+.status-pill.processing {
+  background: #fff2d8;
+  color: #8b5a00;
+}
+.status-pill.ready {
+  background: #e7f7e7;
+  color: #1e6b35;
+}
+.status-pill.error {
+  background: #fde8e7;
+  color: #a3362a;
+}
 .ghost-btn,
 .primary-btn {
-  border: 0;
+  border: 1px solid #d5c4b0;
+  padding: 10px 16px;
+  background: #fff;
   cursor: pointer;
-  padding: 10px 14px;
-}
-.ghost-btn {
-  background: #ece1d0;
-  color: #53493f;
 }
 .primary-btn {
-  background: #214b43;
+  background: #221f1b;
   color: #fff;
+  border-color: #221f1b;
 }
 .ghost-btn:disabled,
 .primary-btn:disabled,
 .topic-card:disabled {
-  opacity: .6;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.blueprint-shell,
+.topic-shell,
+.timeline-shell {
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.blueprint-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.blueprint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.label {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #8f6741;
+  margin-bottom: 4px;
+}
+.outline-box {
+  border: 1px solid #eadfce;
+  background: #fffdf8;
+  border-radius: 16px;
+  padding: 14px;
+}
+.outline-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.instruction-input {
+  width: 100%;
+  border: 1px solid #decdb6;
+  border-radius: 14px;
+  padding: 12px;
+  resize: vertical;
+  font: inherit;
+}
+.blueprint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .chapter-shell {
   margin-bottom: 18px;
 }
 .chapter-meta {
   display: flex;
-  gap: 12px;
-  margin-bottom: 8px;
-  color: #7d6b57;
-  font-size: 13px;
+  justify-content: space-between;
+  padding: 0 8px 10px;
+  color: #8b7055;
 }
 .chapter-card {
-  padding: 24px;
+  padding: 22px;
 }
 .chapter-summary {
-  margin: 10px 0 18px;
-  color: #6d5f50;
-}
-.chapter-content {
-  font-family: Georgia, "Noto Serif SC", serif;
-  line-height: 1.9;
-  font-size: 16px;
-}
-.chapter-content :deep(p) {
-  margin: 0 0 1em;
-}
-.placeholder {
-  display: grid;
-  place-items: center;
-  min-height: 260px;
-  margin-bottom: 18px;
-}
-.topic-shell,
-.timeline-shell {
-  padding: 20px;
-  margin-bottom: 18px;
-}
-.topic-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.topic-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.topic-card {
-  border: 1px solid #e5d7c6;
-  background: #fffdf8;
-  text-align: left;
-  padding: 16px;
-  cursor: pointer;
-}
-.topic-card:hover:not(:disabled) {
-  border-color: #214b43;
-  transform: translateY(-1px);
-}
-.topic-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: #8a725d;
-}
-.topic-card h4 {
-  margin: 12px 0 8px;
-  font-size: 18px;
-  font-family: Georgia, "Noto Serif SC", serif;
-}
-.topic-card p {
-  margin: 0;
-  color: #5f5449;
+  color: #695948;
   line-height: 1.6;
 }
-.topic-characters {
-  margin-top: 12px;
-  color: #7e6a58;
-  font-size: 12px;
+.chapter-content {
+  line-height: 1.85;
 }
+.chapter-content :deep(p) {
+  margin: 0 0 16px;
+}
+.placeholder,
 .topic-loading,
 .timeline-empty {
   display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #7c6a58;
+  min-height: 160px;
+}
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #eadfce;
+  border-top-color: #8f6741;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+.spinner.small {
+  width: 20px;
+  height: 20px;
+}
+.topic-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.topic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.topic-card {
+  border: 1px solid #e8dbcb;
+  padding: 18px;
+  text-align: left;
+  background: #fff;
+  cursor: pointer;
+}
+.topic-top {
+  display: flex;
+  justify-content: space-between;
   gap: 10px;
-  color: #6b6055;
-  min-height: 56px;
+  color: #8b7055;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.topic-card h4 {
+  margin: 0 0 8px;
+}
+.topic-card p {
+  margin: 0;
+  line-height: 1.6;
+  color: #5f5247;
+}
+.topic-characters {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #7a634e;
 }
 .timeline-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 .timeline-item {
   display: flex;
   gap: 12px;
-  border: 1px solid #ecdfcf;
+  padding: 12px;
   border-radius: 14px;
-  background: #fffdf8;
-  padding: 12px 14px;
+  background: #fffaf1;
 }
 .timeline-no {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: #f0e4d1;
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  color: #5e4c38;
+  min-width: 40px;
+  font-family: "JetBrains Mono", monospace;
+  color: #8b7055;
 }
 .timeline-title {
-  font-weight: 700;
+  font-weight: 600;
   margin-bottom: 4px;
 }
 .timeline-summary {
-  color: #706356;
-  font-size: 14px;
-}
-.spinner {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 3px solid #dfd4c4;
-  border-top-color: #214b43;
-  animation: spin 0.9s linear infinite;
-}
-.spinner.small {
-  width: 18px;
-  height: 18px;
-  border-width: 2px;
+  color: #665a4e;
+  line-height: 1.5;
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-@media (max-width: 980px) {
-  .story-header,
-  .topic-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .topic-grid {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

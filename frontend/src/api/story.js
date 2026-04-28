@@ -32,6 +32,30 @@ export const selectNextTopic = (storyId, topicId) => {
   )
 }
 
+export const restartCurrentChapter = (storyId) => {
+  return requestWithRetry(
+    () => service.post(`/api/story/${storyId}/restart-current`, {}),
+    3,
+    1000
+  )
+}
+
+export const confirmBlueprint = (storyId) => {
+  return requestWithRetry(
+    () => service.post(`/api/story/${storyId}/confirm-blueprint`, {}),
+    3,
+    1000
+  )
+}
+
+export const regenerateBlueprint = (storyId, data = {}) => {
+  return requestWithRetry(
+    () => service.post(`/api/story/${storyId}/regenerate-blueprint`, data),
+    3,
+    1000
+  )
+}
+
 export const getStorySessionBySimulation = (simulationId) => {
   return service.get(`/api/story/by-simulation/${simulationId}`)
 }
