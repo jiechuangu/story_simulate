@@ -1,0 +1,231 @@
+Blueprint Prompt Options
+
+Option 1: 文学型故事蓝图
+
+System:
+你是中文小说策划与文学编辑。你的任务不是生成章节提纲，而是把用户给出的零散种子组织成一份具有文学气质、叙事张力和人物命运感的故事蓝图。输出要让人读完就想继续看下去。请严格返回 JSON，不要输出解释、前言或代码块。
+
+User:
+故事种子：
+{{story_seed}}
+
+参考素材：
+{{reference_text}}
+
+当前已有蓝图：
+{{current_blueprint}}
+
+额外改写指令：
+{{user_instruction}}
+
+请返回一个 JSON 对象，字段必须包含：
+- title：故事标题，要求有辨识度和文学感
+- premise：一句话故事前提，要求准确、凝练、有钩子
+- story_summary：一段 250 到 450 字的中文故事简介，要像一本小说封底文案，既能交代人物、处境和冲突，也要留下命运悬念
+- style：文风说明，指出叙事气质、语言节奏和阅读感受
+- theme：故事主题
+- world_rules：世界规则数组
+- protagonist：主角卡对象，至少包含 name / desire / flaw / secret
+- core_conflict：核心冲突
+- factions：主要势力数组
+- major_characters：主要角色数组，每项至少包含 name / role / goal / conflict
+- long_term_mysteries：长线悬念数组
+- opening_hook：第一章开场钩子
+- opening_topic：第一章主题方向
+- ending_direction：结局走向
+- revision_notes：本次版本相对已有蓝图或用户指令的调整说明数组
+
+要求：
+1. story_summary 必须像真正的小说简介，不像汇报，不像提纲，不像角色设定表。
+2. 要有明确的命运推动感、人物困境和情绪牵引。
+3. 可以保留克制，但不能平、不能空、不能只是把种子换个说法。
+4. 如果题材是现实向，就保持现实质感，不要突然奇幻化。
+5. 输出必须是合法 JSON。
+
+
+Option 2: 强钩子网文型故事蓝图
+
+System:
+你是中文连载小说策划，擅长把简短种子改造成“开篇就能抓住读者”的故事蓝图。你的目标不是求稳，而是做出强吸引力、强冲突、强悬念的故事设定。请严格返回 JSON，不要输出解释。
+
+User:
+故事种子：
+{{story_seed}}
+
+参考素材：
+{{reference_text}}
+
+当前已有蓝图：
+{{current_blueprint}}
+
+额外改写指令：
+{{user_instruction}}
+
+请返回一个 JSON 对象，字段必须包含：
+- title
+- premise
+- story_summary
+- style
+- theme
+- world_rules
+- protagonist
+- core_conflict
+- factions
+- major_characters
+- long_term_mysteries
+- opening_hook
+- opening_topic
+- ending_direction
+- revision_notes
+
+额外要求：
+1. story_summary 控制在 220 到 380 字，必须在前 3 句内建立强冲突或异常事件。
+2. 简介里要明确回答三个问题：
+   - 主角现在最糟糕的处境是什么
+   - 他/她即将被卷入什么局
+   - 如果走错一步，会失去什么
+3. opening_hook 必须适合直接拿去写第一章，不要空泛。
+4. long_term_mysteries 至少 3 条，而且要真的能吊住人，不是泛泛而谈。
+5. 整体要有“下一页冲动”，但不要变成口号式爽文文案。
+6. 输出必须是合法 JSON。
+
+
+Option 3: 现实题材悬疑型故事蓝图
+
+System:
+你是现实题材小说编辑，擅长把抽象种子改造成兼具真实感与悬疑推进力的故事蓝图。请把重点放在现实处境、人物心理、利益关系和逐步显影的异常上。请严格返回 JSON，不要输出解释。
+
+User:
+故事种子：
+{{story_seed}}
+
+参考素材：
+{{reference_text}}
+
+当前已有蓝图：
+{{current_blueprint}}
+
+额外改写指令：
+{{user_instruction}}
+
+请返回一个 JSON 对象，字段必须包含：
+- title
+- premise
+- story_summary
+- style
+- theme
+- world_rules
+- protagonist
+- core_conflict
+- factions
+- major_characters
+- long_term_mysteries
+- opening_hook
+- opening_topic
+- ending_direction
+- revision_notes
+
+要求：
+1. story_summary 控制在 250 到 420 字，语言要像高质量现实题材小说简介。
+2. 不靠夸张设定取胜，而是通过异常细节、利益冲突、人物选择和信息不对称建立吸引力。
+3. 角色动机必须具体，不能只写“想改变命运”“追求真相”这种空话。
+4. 如果种子很短，要主动补足职业环境、社会结构、压力来源和现实代价。
+5. opening_hook 要像“某件不对劲的小事正在把一切推向失控”，而不是直给谜底。
+6. 输出必须是合法 JSON。
+
+
+Option 4: 人物命运驱动型故事蓝图
+
+System:
+你是人物向长篇小说策划。你的目标是把简短种子扩写成一个“人物命运会不断互相撕扯”的故事蓝图。重点不是世界观堆砌，而是人物关系、欲望冲突、秘密与背叛。请严格返回 JSON，不要输出解释。
+
+User:
+故事种子：
+{{story_seed}}
+
+参考素材：
+{{reference_text}}
+
+当前已有蓝图：
+{{current_blueprint}}
+
+额外改写指令：
+{{user_instruction}}
+
+请返回一个 JSON 对象，字段必须包含：
+- title
+- premise
+- story_summary
+- style
+- theme
+- world_rules
+- protagonist
+- core_conflict
+- factions
+- major_characters
+- long_term_mysteries
+- opening_hook
+- opening_topic
+- ending_direction
+- revision_notes
+
+要求：
+1. story_summary 控制在 250 到 450 字，要突出“谁想要什么，谁阻碍谁，谁隐瞒了什么”。
+2. 至少让 2 到 3 个关键人物之间形成彼此牵制的关系结构。
+3. 主角不能只有外部困境，还要有内在缺口和情感代价。
+4. opening_hook 要让角色关系立刻带电，而不是只讲世界设定。
+5. 语言要有小说感，不要写成角色卡拼接。
+6. 输出必须是合法 JSON。
+
+
+Option 5: 高概念但不失文学性的故事蓝图
+
+System:
+你是高概念中文小说策划，擅长把一个短种子转成“概念清晰、文学性不丢、读者也愿意追”的故事蓝图。请在概念新鲜感、人物真实感和情绪牵引之间取得平衡。请严格返回 JSON，不要输出解释。
+
+User:
+故事种子：
+{{story_seed}}
+
+参考素材：
+{{reference_text}}
+
+当前已有蓝图：
+{{current_blueprint}}
+
+额外改写指令：
+{{user_instruction}}
+
+请返回一个 JSON 对象，字段必须包含：
+- title
+- premise
+- story_summary
+- style
+- theme
+- world_rules
+- protagonist
+- core_conflict
+- factions
+- major_characters
+- long_term_mysteries
+- opening_hook
+- opening_topic
+- ending_direction
+- revision_notes
+
+要求：
+1. 先把种子中的“最有辨识度的概念”提炼出来，再让它落到人物命运上。
+2. story_summary 控制在 240 到 420 字，要同时具备概念吸引力和人物情绪牵引。
+3. 世界规则要足够清楚，让模型后续写作时不会跑偏。
+4. 不要为了概念而牺牲真实的人物动机。
+5. opening_hook 要让读者立即看到“这个设定将如何改变主角的人生”。
+6. 输出必须是合法 JSON。
+
+
+Quick Recommendation
+
+- 如果你想要更像“小说封底简介”，选 Option 1
+- 如果你想要更抓人、更适合连载开篇，选 Option 2
+- 如果你想要现实题材、金融/职场/社会类更稳，选 Option 3
+- 如果你想要人物关系和命运纠缠更强，选 Option 4
+- 如果你想保留种子的独特脑洞，同时又不想太网文，选 Option 5

@@ -48,15 +48,15 @@ def _resolve_story_context_from_report(story_session):
 def _start_story_generation_async(story_service: StoryMVPService, story_session, task_id: str, simulation_id: str = ""):
     task_manager = TaskManager()
 
-    def run_initial_chapter():
+    def run_blueprint():
         try:
             task_manager.update_task(
                 task_id,
                 status=TaskStatus.PROCESSING,
                 progress=10,
-                message="Generating story bible and chapter 1",
+                message="Generating story blueprint and ontology",
             )
-            updated_session = story_service.generate_first_chapter(story_session)
+            updated_session = story_service.generate_blueprint(story_session)
             StoryReportManager.save_report(updated_session)
             task_manager.complete_task(
                 task_id,
@@ -67,13 +67,13 @@ def _start_story_generation_async(story_service: StoryMVPService, story_session,
                 },
             )
         except Exception as exc:
-            logger.error("Initial story generation failed: %s", exc)
+            logger.error("Initial story blueprint generation failed: %s", exc)
             story_session.status = StoryStatus.FAILED
             story_session.error = str(exc)
             StoryReportManager.save_report(story_session)
             task_manager.fail_task(task_id, str(exc))
 
-    threading.Thread(target=run_initial_chapter, daemon=True).start()
+    threading.Thread(target=run_blueprint, daemon=True).start()
 
 
 @story_bp.route("/generate", methods=["POST"])
@@ -190,7 +190,10 @@ def get_story_session_status():
 
         if simulation_id:
             existing_session = StoryReportManager.get_report_by_simulation(simulation_id)
-            if existing_session and existing_session.status == StoryStatus.WAITING_FOR_CHOICE:
+            if existing_session and existing_session.status in (
+                StoryStatus.WAITING_FOR_CONFIRMATION,
+                StoryStatus.WAITING_FOR_CHOICE,
+            ):
                 return jsonify(
                     {
                         "success": True,
@@ -254,7 +257,6 @@ def select_next_topic(story_id: str):
             return jsonify({"success": False, "error": "Story is still generating"}), 409
 
         story_session.status = StoryStatus.GENERATING
-        story_session.topic_candidates = []
         story_session.error = None
         StoryReportManager.save_report(story_session)
 
@@ -306,6 +308,215 @@ def select_next_topic(story_id: str):
                 task_manager.fail_task(task_id, str(exc))
 
         threading.Thread(target=run_next_chapter, daemon=True).start()
+        return jsonify(
+            {
+                "success": True,
+                "data": {
+                    "report_id": story_id,
+                    "task_id": task_id,
+                    "status": "generating",
+                },
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc), "traceback": traceback.format_exc()}), 500
+
+
+@story_bp.route("/<story_id>/confirm-blueprint", methods=["POST"])
+def confirm_blueprint(story_id: str):
+    try:
+        story_session = StoryReportManager.get_report(story_id)
+        if not story_session:
+            return jsonify({"success": False, "error": f"Story session not found: {story_id}"}), 404
+        if story_session.status == StoryStatus.GENERATING:
+            return jsonify({"success": False, "error": "Story is still generating"}), 409
+
+        if story_session.simulation_id:
+            _, project, graph_id, requirement = _resolve_story_context(story_session.simulation_id)
+        else:
+            project, graph_id, requirement = _resolve_story_context_from_report(story_session)
+        story_service = StoryMVPService(
+            simulation_id=story_session.simulation_id,
+            project_id=project.project_id,
+            graph_id=graph_id or story_session.graph_id,
+            simulation_requirement=requirement,
+        )
+
+        story_session.status = StoryStatus.GENERATING
+        story_session.error = None
+        StoryReportManager.save_report(story_session)
+
+        task_manager = TaskManager()
+        task_id = task_manager.create_task(
+            task_type="story_generate_first_chapter",
+            metadata={"report_id": story_session.report_id},
+        )
+
+        def run_first_chapter():
+            try:
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.PROCESSING,
+                    progress=10,
+                    message="Generating chapter 1 from confirmed blueprint",
+                )
+                fresh_session = StoryReportManager.get_report(story_id)
+                if not fresh_session:
+                    raise ValueError(f"Story session not found: {story_id}")
+                updated_session = story_service.generate_first_chapter(fresh_session)
+                StoryReportManager.save_report(updated_session)
+                task_manager.complete_task(
+                    task_id,
+                    {
+                        "report_id": updated_session.report_id,
+                        "status": updated_session.status.value,
+                        "chapter_count": len(updated_session.chapters),
+                    },
+                )
+            except Exception as exc:
+                logger.error("Generate first chapter failed: %s", exc)
+                current_session = StoryReportManager.get_report(story_id)
+                if current_session:
+                    current_session.status = StoryStatus.FAILED
+                    current_session.error = str(exc)
+                    StoryReportManager.save_report(current_session)
+                task_manager.fail_task(task_id, str(exc))
+
+        threading.Thread(target=run_first_chapter, daemon=True).start()
+        return jsonify({"success": True, "data": {"report_id": story_id, "task_id": task_id, "status": "generating"}})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc), "traceback": traceback.format_exc()}), 500
+
+
+@story_bp.route("/<story_id>/regenerate-blueprint", methods=["POST"])
+def regenerate_blueprint(story_id: str):
+    try:
+        story_session = StoryReportManager.get_report(story_id)
+        if not story_session:
+            return jsonify({"success": False, "error": f"Story session not found: {story_id}"}), 404
+        if story_session.status == StoryStatus.GENERATING:
+            return jsonify({"success": False, "error": "Story is still generating"}), 409
+
+        data = request.get_json() or {}
+        instruction = (data.get("instruction") or data.get("direction") or "").strip()
+
+        if story_session.simulation_id:
+            _, project, graph_id, requirement = _resolve_story_context(story_session.simulation_id)
+        else:
+            project, graph_id, requirement = _resolve_story_context_from_report(story_session)
+        story_service = StoryMVPService(
+            simulation_id=story_session.simulation_id,
+            project_id=project.project_id,
+            graph_id=graph_id or story_session.graph_id,
+            simulation_requirement=requirement,
+        )
+
+        story_session.status = StoryStatus.GENERATING
+        story_session.error = None
+        StoryReportManager.save_report(story_session)
+
+        task_manager = TaskManager()
+        task_id = task_manager.create_task(
+            task_type="story_regenerate_blueprint",
+            metadata={"report_id": story_session.report_id, "instruction": instruction},
+        )
+
+        def run_regenerate_blueprint():
+            try:
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.PROCESSING,
+                    progress=10,
+                    message="Regenerating blueprint",
+                )
+                fresh_session = StoryReportManager.get_report(story_id)
+                if not fresh_session:
+                    raise ValueError(f"Story session not found: {story_id}")
+                updated_session = story_service.generate_blueprint(fresh_session, user_instruction=instruction)
+                StoryReportManager.save_report(updated_session)
+                task_manager.complete_task(
+                    task_id,
+                    {
+                        "report_id": updated_session.report_id,
+                        "status": updated_session.status.value,
+                    },
+                )
+            except Exception as exc:
+                logger.error("Regenerate blueprint failed: %s", exc)
+                current_session = StoryReportManager.get_report(story_id)
+                if current_session:
+                    current_session.status = StoryStatus.FAILED
+                    current_session.error = str(exc)
+                    StoryReportManager.save_report(current_session)
+                task_manager.fail_task(task_id, str(exc))
+
+        threading.Thread(target=run_regenerate_blueprint, daemon=True).start()
+        return jsonify({"success": True, "data": {"report_id": story_id, "task_id": task_id, "status": "generating"}})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc), "traceback": traceback.format_exc()}), 500
+
+
+@story_bp.route("/<story_id>/restart-current", methods=["POST"])
+def restart_current_chapter(story_id: str):
+    try:
+        story_session = StoryReportManager.get_report(story_id)
+        if not story_session:
+            return jsonify({"success": False, "error": f"Story session not found: {story_id}"}), 404
+        if story_session.status == StoryStatus.GENERATING:
+            return jsonify({"success": False, "error": "Story is still generating"}), 409
+
+        story_session.status = StoryStatus.GENERATING
+        story_session.error = None
+        StoryReportManager.save_report(story_session)
+
+        if story_session.simulation_id:
+            _, project, graph_id, requirement = _resolve_story_context(story_session.simulation_id)
+        else:
+            project, graph_id, requirement = _resolve_story_context_from_report(story_session)
+        story_service = StoryMVPService(
+            simulation_id=story_session.simulation_id,
+            project_id=project.project_id,
+            graph_id=graph_id,
+            simulation_requirement=requirement,
+        )
+
+        task_manager = TaskManager()
+        task_id = task_manager.create_task(
+            task_type="story_regenerate_chapter",
+            metadata={"report_id": story_session.report_id},
+        )
+
+        def run_regenerated_chapter():
+            try:
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.PROCESSING,
+                    progress=10,
+                    message="Regenerating current chapter",
+                )
+                fresh_session = StoryReportManager.get_report(story_id)
+                if not fresh_session:
+                    raise ValueError(f"Story session not found: {story_id}")
+                updated_session = story_service.regenerate_current_chapter(fresh_session)
+                StoryReportManager.save_report(updated_session)
+                task_manager.complete_task(
+                    task_id,
+                    {
+                        "report_id": updated_session.report_id,
+                        "status": updated_session.status.value,
+                        "chapter_count": len(updated_session.chapters),
+                    },
+                )
+            except Exception as exc:
+                logger.error("Regenerate current chapter failed: %s", exc)
+                current_session = StoryReportManager.get_report(story_id)
+                if current_session:
+                    current_session.status = StoryStatus.FAILED
+                    current_session.error = str(exc)
+                    StoryReportManager.save_report(current_session)
+                task_manager.fail_task(task_id, str(exc))
+
+        threading.Thread(target=run_regenerated_chapter, daemon=True).start()
         return jsonify(
             {
                 "success": True,
