@@ -4,6 +4,10 @@ export const createStorySession = (data) => {
   return requestWithRetry(() => service.post('/api/story/generate', data), 3, 1000)
 }
 
+export const createStorySessionFromSeed = (data) => {
+  return requestWithRetry(() => service.post('/api/story/generate-from-seed', data), 3, 1000)
+}
+
 export const getStorySessionStatus = (storyId) => {
   return service.post('/api/story/generate/status', { report_id: storyId })
 }

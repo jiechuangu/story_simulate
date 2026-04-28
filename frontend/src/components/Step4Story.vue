@@ -8,7 +8,7 @@
       </div>
       <div class="header-actions">
         <span class="status-pill" :class="statusClass">{{ statusLabel }}</span>
-        <button class="ghost-btn" :disabled="retrying || !props.simulationId" @click="restartStory">
+        <button class="ghost-btn" :disabled="retrying" @click="restartStory">
           {{ retrying ? 'Regenerating...' : 'Restart Story' }}
         </button>
       </div>
@@ -94,7 +94,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { createStorySession, getStorySession, selectNextTopic } from '../api/story'
+import { createStorySession, createStorySessionFromSeed, getStorySession, selectNextTopic } from '../api/story'
 
 const router = useRouter()
 
@@ -205,14 +205,24 @@ const pickTopic = async (topic) => {
 }
 
 const restartStory = async () => {
-  if (retrying.value || !props.simulationId) return
+  if (retrying.value) return
   retrying.value = true
   try {
-    log(`Restarting story for simulation: ${props.simulationId}`)
-    const res = await createStorySession({
-      simulation_id: props.simulationId,
-      force_regenerate: true
-    })
+    let res = null
+    if (props.simulationId) {
+      log(`Restarting story for simulation: ${props.simulationId}`)
+      res = await createStorySession({
+        simulation_id: props.simulationId,
+        force_regenerate: true
+      })
+    } else {
+      const seed = (storySession.value?.simulation_requirement || '').trim()
+      if (!seed) {
+        throw new Error('Missing story seed for restart')
+      }
+      log('Restarting story from current seed')
+      res = await createStorySessionFromSeed({ story_seed: seed })
+    }
     const nextReportId = res.data?.report_id
     if (!nextReportId) {
       throw new Error('Failed to create a new story session')

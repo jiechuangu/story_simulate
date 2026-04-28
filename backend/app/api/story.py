@@ -32,6 +32,50 @@ def _resolve_story_context(simulation_id: str):
     return simulation, project, graph_id, requirement
 
 
+def _resolve_story_context_from_report(story_session):
+    project = ProjectManager.get_project(story_session.project_id)
+    if not project:
+        raise ValueError(f"Project not found: {story_session.project_id}")
+    graph_id = project.graph_id
+    requirement = (
+        project.simulation_requirement
+        or story_session.simulation_requirement
+        or "Write an interactive novel from the provided seed."
+    )
+    return project, graph_id, requirement
+
+
+def _start_story_generation_async(story_service: StoryMVPService, story_session, task_id: str, simulation_id: str = ""):
+    task_manager = TaskManager()
+
+    def run_initial_chapter():
+        try:
+            task_manager.update_task(
+                task_id,
+                status=TaskStatus.PROCESSING,
+                progress=10,
+                message="Generating story bible and chapter 1",
+            )
+            updated_session = story_service.generate_first_chapter(story_session)
+            StoryReportManager.save_report(updated_session)
+            task_manager.complete_task(
+                task_id,
+                {
+                    "report_id": updated_session.report_id,
+                    "simulation_id": simulation_id,
+                    "status": updated_session.status.value,
+                },
+            )
+        except Exception as exc:
+            logger.error("Initial story generation failed: %s", exc)
+            story_session.status = StoryStatus.FAILED
+            story_session.error = str(exc)
+            StoryReportManager.save_report(story_session)
+            task_manager.fail_task(task_id, str(exc))
+
+    threading.Thread(target=run_initial_chapter, daemon=True).start()
+
+
 @story_bp.route("/generate", methods=["POST"])
 def create_story_session():
     try:
@@ -65,38 +109,11 @@ def create_story_session():
         story_session = story_service.create_empty_report(report_id=f"report_{uuid.uuid4().hex[:12]}")
         StoryReportManager.save_report(story_session)
 
-        task_manager = TaskManager()
-        task_id = task_manager.create_task(
+        task_id = TaskManager().create_task(
             task_type="story_generate",
             metadata={"simulation_id": simulation_id, "report_id": story_session.report_id},
         )
-
-        def run_initial_chapter():
-            try:
-                task_manager.update_task(
-                    task_id,
-                    status=TaskStatus.PROCESSING,
-                    progress=10,
-                    message="Generating story bible and chapter 1",
-                )
-                updated_session = story_service.generate_first_chapter(story_session)
-                StoryReportManager.save_report(updated_session)
-                task_manager.complete_task(
-                    task_id,
-                    {
-                        "report_id": updated_session.report_id,
-                        "simulation_id": simulation_id,
-                        "status": updated_session.status.value,
-                    },
-                )
-            except Exception as exc:
-                logger.error("Initial story generation failed: %s", exc)
-                story_session.status = StoryStatus.FAILED
-                story_session.error = str(exc)
-                StoryReportManager.save_report(story_session)
-                task_manager.fail_task(task_id, str(exc))
-
-        threading.Thread(target=run_initial_chapter, daemon=True).start()
+        _start_story_generation_async(story_service, story_session, task_id, simulation_id=simulation_id)
 
         return jsonify(
             {
@@ -112,6 +129,55 @@ def create_story_session():
         )
     except Exception as exc:
         logger.error("Start story generation failed: %s", exc)
+        return jsonify({"success": False, "error": str(exc), "traceback": traceback.format_exc()}), 500
+
+
+@story_bp.route("/generate-from-seed", methods=["POST"])
+def create_story_session_from_seed():
+    try:
+        data = request.get_json() or {}
+        seed = (data.get("story_seed") or data.get("seed") or data.get("simulation_requirement") or "").strip()
+        if not seed:
+            return jsonify({"success": False, "error": "Missing story_seed"}), 400
+
+        project_name = (data.get("project_name") or "Story Seed Project").strip() or "Story Seed Project"
+
+        project = ProjectManager.create_project(name=project_name)
+        project.simulation_requirement = seed
+        project.total_text_length = len(seed)
+        ProjectManager.save_project(project)
+        ProjectManager.save_extracted_text(project.project_id, seed)
+
+        story_service = StoryMVPService(
+            simulation_id="",
+            project_id=project.project_id,
+            graph_id=project.graph_id,
+            simulation_requirement=seed,
+        )
+        story_session = story_service.create_empty_report(report_id=f"report_{uuid.uuid4().hex[:12]}")
+        StoryReportManager.save_report(story_session)
+
+        task_id = TaskManager().create_task(
+            task_type="story_generate",
+            metadata={"report_id": story_session.report_id, "project_id": project.project_id, "source": "seed"},
+        )
+        _start_story_generation_async(story_service, story_session, task_id, simulation_id="")
+
+        return jsonify(
+            {
+                "success": True,
+                "data": {
+                    "report_id": story_session.report_id,
+                    "project_id": project.project_id,
+                    "simulation_id": "",
+                    "task_id": task_id,
+                    "status": story_session.status.value,
+                    "already_generated": False,
+                },
+            }
+        )
+    except Exception as exc:
+        logger.error("Start seed story generation failed: %s", exc)
         return jsonify({"success": False, "error": str(exc), "traceback": traceback.format_exc()}), 500
 
 
@@ -192,7 +258,10 @@ def select_next_topic(story_id: str):
         story_session.error = None
         StoryReportManager.save_report(story_session)
 
-        _, project, graph_id, requirement = _resolve_story_context(story_session.simulation_id)
+        if story_session.simulation_id:
+            _, project, graph_id, requirement = _resolve_story_context(story_session.simulation_id)
+        else:
+            project, graph_id, requirement = _resolve_story_context_from_report(story_session)
         story_service = StoryMVPService(
             simulation_id=story_session.simulation_id,
             project_id=project.project_id,
@@ -282,11 +351,19 @@ def delete_story_session(story_id: str):
 def chat_with_story_guide():
     data = request.get_json() or {}
     simulation_id = data.get("simulation_id")
+    story_id = data.get("story_id")
     message = (data.get("message") or "").strip()
-    if not simulation_id or not message:
-        return jsonify({"success": False, "error": "Missing simulation_id or message"}), 400
+    if not message:
+        return jsonify({"success": False, "error": "Missing message"}), 400
 
-    story_session = StoryReportManager.get_report_by_simulation(simulation_id)
+    story_session = None
+    if story_id:
+        story_session = StoryReportManager.get_report(story_id)
+    elif simulation_id:
+        story_session = StoryReportManager.get_report_by_simulation(simulation_id)
+    else:
+        return jsonify({"success": False, "error": "Missing simulation_id or story_id"}), 400
+
     if not story_session:
         return jsonify({"success": False, "error": "Story not found"}), 404
 
