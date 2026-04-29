@@ -58,3 +58,8 @@ backend/uploads/
 
 # Docker 数据
 data/
+
+# Dataset pipeline artifacts
+data_projects/*/novel.txt
+data_projects/*/outputs/
+demo/*_chapters/
