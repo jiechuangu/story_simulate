@@ -1,723 +1,132 @@
 <template>
-  <div class="home-container">
-    <nav class="navbar">
-      <div class="nav-brand">MIROFISH</div>
-      <div class="nav-links">
-        <LanguageSwitcher />
-        <a href="https://github.com/666ghj/MiroFish" target="_blank" class="github-link">
-          {{ $t('nav.visitGithub') }} <span class="arrow">↗</span>
-        </a>
+  <div class="home">
+    <header>
+      <h1>Story Simulate</h1>
+      <p class="muted">先让世界里的人物行动起来，再把发生的事写成小说。每章结束后由你决定下一章的方向。</p>
+    </header>
+
+    <section class="card create">
+      <h2>新故事</h2>
+      <textarea
+        v-model="seed"
+        rows="6"
+        placeholder="写下故事需求：题材、时代、主角、你想看的矛盾……也可以只上传素材，让系统据此续写或改编。"
+      />
+      <h3>文风</h3>
+      <StylePicker v-model="style" v-model:notes="styleNotes" :styles="styles" />
+      <div class="row">
+        <label class="btn">
+          上传素材（txt / md / pdf）
+          <input type="file" multiple accept=".txt,.md,.markdown,.pdf" hidden @change="onFiles" />
+        </label>
+        <span class="muted files">{{ files.map((f) => f.name).join('、') }}</span>
+        <button v-if="files.length" class="btn small" @click="files = []">清除</button>
+        <span class="spacer" />
+        <button class="btn primary" :disabled="creating || (!seed.trim() && !files.length)" @click="create">
+          {{ creating ? '创建中…' : '生成蓝图' }}
+        </button>
       </div>
-    </nav>
+      <p v-if="error" class="error">{{ error }}</p>
+    </section>
 
-    <div class="main-content">
-      <section class="hero-section">
-        <div class="hero-left">
-          <div class="tag-row">
-            <span class="orange-tag">{{ $t('home.tagline') }}</span>
-            <span class="version-text">{{ $t('home.version') }}</span>
+    <section>
+      <h2>我的故事</h2>
+      <p v-if="!stories.length" class="muted">还没有故事。</p>
+      <div class="list">
+        <router-link v-for="s in stories" :key="s.id" :to="`/story/${s.id}`" class="card item">
+          <div class="item-head">
+            <strong>{{ s.title }}</strong>
+            <span class="tag">{{ styleName(s.style_id) }} · {{ statusText(s.status) }}</span>
           </div>
-
-          <h1 class="main-title">
-            {{ $t('home.heroTitle1') }}<br>
-            <span class="gradient-text">{{ $t('home.heroTitle2') }}</span>
-          </h1>
-
-          <div class="hero-desc">
-            <p>
-              <i18n-t keypath="home.heroDesc" tag="span">
-                <template #brand><span class="highlight-bold">{{ $t('home.heroDescBrand') }}</span></template>
-                <template #agentScale><span class="highlight-orange">{{ $t('home.heroDescAgentScale') }}</span></template>
-                <template #optimalSolution><span class="highlight-code">{{ $t('home.heroDescOptimalSolution') }}</span></template>
-              </i18n-t>
-            </p>
-            <p class="slogan-text">
-              {{ $t('home.slogan') }}<span class="blinking-cursor">_</span>
-            </p>
+          <p class="muted premise">{{ s.premise }}</p>
+          <div class="item-foot muted">
+            <span>{{ s.chapter_count }} 章 · {{ s.updated_at.replace('T', ' ') }}</span>
+            <button class="btn small danger" @click.prevent="remove(s)">删除</button>
           </div>
-
-          <div class="decoration-square"></div>
-        </div>
-
-        <div class="hero-right">
-          <div class="logo-container">
-            <img src="../assets/logo/MiroFish_logo_left.jpeg" alt="MiroFish Logo" class="hero-logo" />
-          </div>
-
-          <button class="scroll-down-btn" @click="scrollToBottom">
-            ↓
-          </button>
-        </div>
-      </section>
-
-      <section class="dashboard-section">
-        <div class="left-panel">
-          <div class="panel-header">
-            <span class="status-dot">■</span> {{ $t('home.systemStatus') }}
-          </div>
-
-          <h2 class="section-title">{{ $t('home.systemReady') }}</h2>
-          <p class="section-desc">
-            {{ $t('home.systemReadyDesc') }}
-          </p>
-
-          <div class="metrics-row">
-            <div class="metric-card">
-              <div class="metric-value">{{ $t('home.metricLowCost') }}</div>
-              <div class="metric-label">{{ $t('home.metricLowCostDesc') }}</div>
-            </div>
-            <div class="metric-card">
-              <div class="metric-value">{{ $t('home.metricHighAvail') }}</div>
-              <div class="metric-label">{{ $t('home.metricHighAvailDesc') }}</div>
-            </div>
-          </div>
-
-          <div class="steps-container">
-            <div class="steps-header">
-              <span class="diamond-icon">◇</span> {{ $t('home.workflowSequence') }}
-            </div>
-            <div class="workflow-list">
-              <div class="workflow-item">
-                <span class="step-num">01</span>
-                <div class="step-info">
-                  <div class="step-title">{{ $t('home.step01Title') }}</div>
-                  <div class="step-desc">{{ $t('home.step01Desc') }}</div>
-                </div>
-              </div>
-              <div class="workflow-item">
-                <span class="step-num">02</span>
-                <div class="step-info">
-                  <div class="step-title">{{ $t('home.step02Title') }}</div>
-                  <div class="step-desc">{{ $t('home.step02Desc') }}</div>
-                </div>
-              </div>
-              <div class="workflow-item">
-                <span class="step-num">03</span>
-                <div class="step-info">
-                  <div class="step-title">{{ $t('home.step03Title') }}</div>
-                  <div class="step-desc">{{ $t('home.step03Desc') }}</div>
-                </div>
-              </div>
-              <div class="workflow-item">
-                <span class="step-num">04</span>
-                <div class="step-info">
-                  <div class="step-title">{{ $t('home.step04Title') }}</div>
-                  <div class="step-desc">{{ $t('home.step04Desc') }}</div>
-                </div>
-              </div>
-              <div class="workflow-item">
-                <span class="step-num">05</span>
-                <div class="step-info">
-                  <div class="step-title">{{ $t('home.step05Title') }}</div>
-                  <div class="step-desc">{{ $t('home.step05Desc') }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="right-panel">
-          <div class="console-box">
-            <div class="console-section">
-              <div class="console-header">
-                <span class="console-label">{{ $t('home.storySeed') }}</span>
-              </div>
-              <div class="input-wrapper">
-                <textarea
-                  v-model="formData.storySeed"
-                  class="code-input"
-                  :placeholder="$t('home.seedPlaceholder')"
-                  rows="6"
-                  :disabled="loading"
-                ></textarea>
-                <div class="model-badge">{{ $t('home.engineBadge') }}</div>
-              </div>
-            </div>
-
-            <div class="console-section btn-section">
-              <button
-                class="start-engine-btn"
-                @click="startSimulation"
-                :disabled="!canSubmit || loading"
-              >
-                <span v-if="!loading">{{ $t('home.startStory') }}</span>
-                <span v-else>{{ $t('home.initializing') }}</span>
-                <span class="btn-arrow">→</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <HistoryDatabase />
-      <ProjectTaskHistory />
-      <StoryTaskHistory />
-    </div>
+        </router-link>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import HistoryDatabase from '../components/HistoryDatabase.vue'
-import ProjectTaskHistory from '../components/ProjectTaskHistory.vue'
-import StoryTaskHistory from '../components/StoryTaskHistory.vue'
-import LanguageSwitcher from '../components/LanguageSwitcher.vue'
-import { createStorySessionFromSeed } from '../api/story'
+import { api } from '../api'
+import StylePicker from '../components/StylePicker.vue'
 
 const router = useRouter()
+const styles = ref([])
+const style = ref('realistic')
+const styleNotes = ref('')
+const seed = ref('')
+const files = ref([])
+const creating = ref(false)
+const error = ref('')
+const stories = ref([])
 
-const formData = ref({
-  storySeed: ''
-})
+const STATUS = {
+  generating: '生成中',
+  awaiting_blueprint: '待确认蓝图',
+  awaiting_choice: '待选择方向',
+  failed: '失败'
+}
+const statusText = (s) => STATUS[s] || s
+const styleName = (id) => styles.value.find((s) => s.id === id)?.name || '写实文学'
 
-const loading = ref(false)
-
-const canSubmit = computed(() => formData.value.storySeed.trim() !== '')
-
-const scrollToBottom = () => {
-  window.scrollTo({
-    top: document.body.scrollHeight,
-    behavior: 'smooth'
-  })
+const onFiles = (e) => {
+  files.value = [...e.target.files]
+  e.target.value = ''
 }
 
-const startSimulation = async () => {
-  if (!canSubmit.value || loading.value) return
-  loading.value = true
+const load = async () => {
   try {
-    const res = await createStorySessionFromSeed({
-      story_seed: formData.value.storySeed.trim()
-    })
-    const storyId = res?.data?.report_id
-    if (!storyId) throw new Error('Failed to create story session')
-    router.push({ name: 'Story', params: { storyId } })
-  } catch (err) {
-    console.error('Start story failed:', err)
-    loading.value = false
+    ;[stories.value, styles.value] = await Promise.all([api.list(), api.styles()])
+  } catch (e) {
+    error.value = `无法连接后端：${e.message}`
   }
 }
+
+const create = async () => {
+  creating.value = true
+  error.value = ''
+  try {
+    const { id } = await api.create(seed.value, files.value, style.value, styleNotes.value)
+    router.push(`/story/${id}`)
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    creating.value = false
+  }
+}
+
+const remove = async (s) => {
+  if (!confirm(`删除《${s.title}》？此操作不可恢复。`)) return
+  try {
+    await api.remove(s.id)
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+onMounted(load)
 </script>
 
 <style scoped>
-:root {
-  --black: #000000;
-  --white: #FFFFFF;
-  --orange: #FF4500;
-  --gray-light: #F5F5F5;
-  --gray-text: #666666;
-  --border: #E5E5E5;
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-sans: 'Space Grotesk', 'Noto Sans SC', system-ui, sans-serif;
-  --font-cn: 'Noto Sans SC', system-ui, sans-serif;
-}
-
-.home-container {
-  min-height: 100vh;
-  background: var(--white);
-  font-family: var(--font-sans);
-  color: var(--black);
-}
-
-.navbar {
-  height: 60px;
-  background: var(--black);
-  color: var(--white);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 40px;
-}
-
-.nav-brand {
-  font-family: var(--font-mono);
-  font-weight: 800;
-  letter-spacing: 1px;
-  font-size: 1.2rem;
-}
-
-.nav-links {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.github-link {
-  color: var(--white);
-  text-decoration: none;
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: opacity 0.2s;
-}
-
-.github-link:hover {
-  opacity: 0.8;
-}
-
-.arrow {
-  font-family: sans-serif;
-}
-
-.main-content {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 60px 40px;
-}
-
-.hero-section {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 80px;
-  position: relative;
-}
-
-.hero-left {
-  flex: 1;
-  padding-right: 60px;
-}
-
-.tag-row {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  margin-bottom: 25px;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-
-.orange-tag {
-  background: var(--orange);
-  color: var(--white);
-  padding: 4px 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  font-size: 0.75rem;
-}
-
-.version-text {
-  color: #999;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-}
-
-.main-title {
-  font-size: 4.5rem;
-  line-height: 1.2;
-  font-weight: 500;
-  margin: 0 0 40px 0;
-  letter-spacing: -2px;
-  color: var(--black);
-}
-
-.gradient-text {
-  background: linear-gradient(90deg, #000000 0%, #444444 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  display: inline-block;
-}
-
-.hero-desc {
-  font-size: 1.05rem;
-  line-height: 1.8;
-  color: var(--gray-text);
-  max-width: 640px;
-  margin-bottom: 50px;
-  font-weight: 400;
-  text-align: justify;
-}
-
-.hero-desc p {
-  margin-bottom: 1.5rem;
-}
-
-.highlight-bold {
-  color: var(--black);
-  font-weight: 700;
-}
-
-.highlight-orange {
-  color: var(--orange);
-  font-weight: 700;
-  font-family: var(--font-mono);
-}
-
-.highlight-code {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 2px 6px;
-  border-radius: 2px;
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  color: var(--black);
-  font-weight: 600;
-}
-
-.slogan-text {
-  font-size: 1.2rem;
-  font-weight: 520;
-  color: var(--black);
-  letter-spacing: 1px;
-  border-left: 3px solid var(--orange);
-  padding-left: 15px;
-  margin-top: 20px;
-}
-
-.blinking-cursor {
-  color: var(--orange);
-  animation: blink 1s step-end infinite;
-  font-weight: 700;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-.decoration-square {
-  width: 16px;
-  height: 16px;
-  background: var(--orange);
-}
-
-.hero-right {
-  flex: 0.8;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
-}
-
-.logo-container {
-  width: 100%;
-  display: flex;
-  justify-content: flex-end;
-  padding-right: 40px;
-}
-
-.hero-logo {
-  max-width: 500px;
-  width: 100%;
-}
-
-.scroll-down-btn {
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--border);
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--orange);
-  font-size: 1.2rem;
-  transition: all 0.2s;
-}
-
-.scroll-down-btn:hover {
-  border-color: var(--orange);
-}
-
-.dashboard-section {
-  display: flex;
-  gap: 60px;
-  border-top: 1px solid var(--border);
-  padding-top: 60px;
-  align-items: flex-start;
-}
-
-.dashboard-section .left-panel,
-.dashboard-section .right-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-.left-panel {
-  flex: 0.8;
-}
-
-.panel-header {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: #999;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-.status-dot {
-  color: var(--orange);
-  font-size: 0.8rem;
-}
-
-.section-title {
-  font-size: 2rem;
-  font-weight: 520;
-  margin: 0 0 15px 0;
-}
-
-.section-desc {
-  color: var(--gray-text);
-  margin-bottom: 25px;
-  line-height: 1.6;
-}
-
-.metrics-row {
-  display: flex;
-  gap: 20px;
-  margin-bottom: 15px;
-}
-
-.metric-card {
-  border: 1px solid var(--border);
-  padding: 20px 30px;
-  min-width: 150px;
-}
-
-.metric-value {
-  font-family: var(--font-mono);
-  font-size: 1.8rem;
-  font-weight: 520;
-  margin-bottom: 5px;
-}
-
-.metric-label {
-  font-size: 0.85rem;
-  color: #999;
-}
-
-.steps-container {
-  border: 1px solid var(--border);
-  padding: 30px;
-  position: relative;
-}
-
-.steps-header {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: #999;
-  margin-bottom: 25px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.diamond-icon {
-  font-size: 1.2rem;
-  line-height: 1;
-}
-
-.workflow-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.workflow-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 20px;
-}
-
-.step-num {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  color: var(--black);
-  opacity: 0.3;
-}
-
-.step-info {
-  flex: 1;
-}
-
-.step-title {
-  font-weight: 520;
-  font-size: 1rem;
-  margin-bottom: 4px;
-}
-
-.step-desc {
-  font-size: 0.85rem;
-  color: var(--gray-text);
-}
-
-.right-panel {
-  flex: 1.2;
-}
-
-.console-box {
-  border: 1px solid #ccc;
-  padding: 8px;
-}
-
-.console-section {
-  padding: 20px;
-}
-
-.console-section.btn-section {
-  padding-top: 0;
-}
-
-.console-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 15px;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: #666;
-}
-
-.input-wrapper {
-  position: relative;
-  border: 1px solid #ddd;
-  background: #fafafa;
-}
-
-.code-input {
-  width: 100%;
-  border: none;
-  background: transparent;
-  padding: 20px;
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  resize: vertical;
-  outline: none;
-  min-height: 150px;
-}
-
-.model-badge {
-  position: absolute;
-  bottom: 10px;
-  right: 15px;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: #aaa;
-}
-
-.start-engine-btn {
-  width: 100%;
-  background: var(--black);
-  color: var(--white);
-  border: none;
-  padding: 20px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 1.1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  letter-spacing: 1px;
-  position: relative;
-  overflow: hidden;
-}
-
-.start-engine-btn:not(:disabled) {
-  background: var(--black);
-  border: 1px solid var(--black);
-  animation: pulse-border 2s infinite;
-}
-
-.start-engine-btn:hover:not(:disabled) {
-  background: var(--orange);
-  border-color: var(--orange);
-  transform: translateY(-2px);
-}
-
-.start-engine-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.start-engine-btn:disabled {
-  background: #e5e5e5;
-  color: #999;
-  cursor: not-allowed;
-  transform: none;
-  border: 1px solid #e5e5e5;
-}
-
-@keyframes pulse-border {
-  0% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0.2); }
-  70% { box-shadow: 0 0 0 6px rgba(0, 0, 0, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
-}
-
-@media (max-width: 1024px) {
-  .dashboard-section {
-    flex-direction: column;
-  }
-
-  .hero-section {
-    flex-direction: column;
-  }
-
-  .hero-left {
-    padding-right: 0;
-    margin-bottom: 40px;
-  }
-
-  .hero-logo {
-    max-width: 200px;
-    margin-bottom: 20px;
-  }
-}
-</style>
-
-<style>
-html[lang="en"] .main-title {
-  font-size: 3.5rem;
-  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  letter-spacing: -1px;
-}
-
-html[lang="en"] .hero-desc {
-  text-align: left;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  letter-spacing: 0;
-}
-
-html[lang="en"] .slogan-text {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  letter-spacing: 0;
-}
-
-html[lang="en"] .tag-row {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-html[lang="en"] .navbar .nav-links {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-html[lang="en"] .status-section {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-html[lang="en"] .status-section .status-ready {
-  font-size: 1.6rem;
-}
-
-html[lang="en"] .status-section .metric-value {
-  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 1.4rem;
-}
-
-html[lang="en"] .workflow-list .step-title {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-html[lang="en"] .workflow-list .step-desc {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-  font-size: 0.72rem !important;
-  line-height: 1.4 !important;
-}
-
-html[lang="en"] .workflow-list {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
+.home { max-width: 860px; margin: 0 auto; padding: 48px 16px; display: flex; flex-direction: column; gap: 28px; }
+header h1 { font-family: var(--serif); font-size: 30px; }
+h2 { font-size: 16px; margin-bottom: 12px; }
+.create { display: flex; flex-direction: column; gap: 12px; }
+.create h2 { margin: 0; }
+.create h3 { font-size: 13px; color: var(--muted); font-weight: 500; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.files { font-size: 12px; }
+.spacer { flex: 1; }
+.list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.item { display: flex; flex-direction: column; gap: 6px; transition: border-color .2s; }
+.item:hover { border-color: var(--accent); }
+.item-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.premise { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.item-foot { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: auto; }
 </style>

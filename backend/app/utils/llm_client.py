@@ -1,184 +1,140 @@
 """
-LLM客户端封装
-统一使用OpenAI格式调用
+LLM 客户端封装（OpenAI 兼容接口）。
 """
 
 import json
 import re
-from typing import Optional, Dict, Any, List
+import time
+from typing import Any, Dict, List, Optional
+
 from openai import OpenAI
 
 from ..config import Config
+from .logger import get_logger
+
+logger = get_logger("story.llm")
+
+_THINK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
+_FENCE_START = re.compile(r"^```(?:json)?\s*\n?", re.IGNORECASE)
+_FENCE_END = re.compile(r"\n?```\s*$")
 
 
 class LLMClient:
-    """LLM客户端"""
-    
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None
-    ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
+    def __init__(self, model: Optional[str] = None):
+        if not Config.LLM_API_KEY:
             raise ValueError("LLM_API_KEY 未配置")
-        
+        self.model = model or Config.LLM_MODEL_NAME
         self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
+            api_key=Config.LLM_API_KEY,
+            base_url=Config.LLM_BASE_URL,
+            timeout=Config.LLM_TIMEOUT,
         )
-    
+        # 部分兼容接口不支持 response_format，失败一次后自动关闭
+        self._json_mode_supported = True
+
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = 4096,
-        response_format: Optional[Dict] = None
+        json_mode: bool = False,
+        retries: int = 2,
     ) -> str:
-        """
-        发送聊天请求
-        
-        Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            response_format: 响应格式（如JSON模式）
-            
-        Returns:
-            模型响应文本
-        """
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        
-        if response_format:
-            kwargs["response_format"] = response_format
-        
-        response = self.client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
-        # 部分模型（如MiniMax M2.5）会在content中包含<think>思考内容，需要移除
-        content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
-        return content
-    
+        if json_mode and self._json_mode_supported:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(retries + 1):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+                choice = response.choices[0]
+                content = choice.message.content or ""
+                # 输出被 max_tokens 截断（推理模型的思考过程也占额度）：加大额度重试，而不是返回半截内容
+                while choice.finish_reason == "length" and kwargs["max_tokens"] < Config.LLM_MAX_TOKENS_CAP:
+                    kwargs["max_tokens"] = min(kwargs["max_tokens"] * 2, Config.LLM_MAX_TOKENS_CAP)
+                    logger.warning("输出被截断，加大 max_tokens 到 %s 后重试", kwargs["max_tokens"])
+                    response = self.client.chat.completions.create(**kwargs)
+                    choice = response.choices[0]
+                    content = choice.message.content or ""
+                if choice.finish_reason == "length":
+                    logger.warning("输出在 max_tokens=%s 时仍被截断", kwargs["max_tokens"])
+                return _THINK_RE.sub("", content).strip()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                text = str(exc).lower()
+                if "response_format" in kwargs and ("response_format" in text or "json_object" in text):
+                    logger.warning("接口不支持 response_format，改为普通模式")
+                    self._json_mode_supported = False
+                    kwargs.pop("response_format", None)
+                    continue
+                if attempt < retries:
+                    wait = 2 * (attempt + 1)
+                    logger.warning("LLM 调用失败（%s），%s 秒后重试", exc, wait)
+                    time.sleep(wait)
+        raise RuntimeError(f"LLM 调用失败: {last_exc}")
+
     def chat_json(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
-        max_tokens: int = 4096
+        max_tokens: int = 4096,
     ) -> Dict[str, Any]:
-        """
-        发送聊天请求并返回JSON
-        
-        Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            
-        Returns:
-            解析后的JSON对象
-        """
-        response = self.chat(
-            messages=messages,
-            temperature=temperature,
+        raw = self.chat(messages, temperature=temperature, max_tokens=max_tokens, json_mode=True)
+        parsed = self._parse(raw)
+        if parsed is not None:
+            return parsed
+        # 让模型修一次
+        repaired = self.chat(
+            [
+                {"role": "system", "content": "把用户给出的内容转成一个合法 JSON 对象，保留字段结构。只输出 JSON。"},
+                {"role": "user", "content": raw},
+            ],
+            temperature=0.0,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"}
+            json_mode=True,
         )
-        # 清理markdown代码块标记
-        cleaned_response = response.strip()
-        cleaned_response = re.sub(r'^```(?:json)?\s*\n?', '', cleaned_response, flags=re.IGNORECASE)
-        cleaned_response = re.sub(r'\n?```\s*$', '', cleaned_response)
-        cleaned_response = cleaned_response.strip()
+        parsed = self._parse(repaired)
+        if parsed is None:
+            raise ValueError(f"LLM 返回的 JSON 无法解析: {raw[:500]}")
+        return parsed
 
+    @staticmethod
+    def _parse(text: str) -> Optional[Dict[str, Any]]:
+        cleaned = _FENCE_END.sub("", _FENCE_START.sub("", text.strip())).strip()
         try:
-            return json.loads(cleaned_response)
+            data = json.loads(cleaned)
+            return data if isinstance(data, dict) else {"items": data}
         except json.JSONDecodeError:
-            extracted = self._extract_json_object(cleaned_response)
-            if extracted is not None:
-                return extracted
-
-            repaired = self._repair_json_response(cleaned_response)
-            if repaired is not None:
-                return repaired
-
-            raise ValueError(f"LLM返回的JSON格式无效: {cleaned_response}")
-
-    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
-        """
-        尝试从混合文本中提取第一个完整 JSON 对象
-        """
-        start = text.find('{')
+            pass
+        start = cleaned.find("{")
         if start == -1:
             return None
-
-        depth = 0
-        in_string = False
-        escape = False
-        for idx in range(start, len(text)):
-            ch = text[idx]
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == '\\':
-                    escape = True
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(cleaned)):
+            ch = cleaned[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
                 elif ch == '"':
-                    in_string = False
+                    in_str = False
                 continue
-
             if ch == '"':
-                in_string = True
-            elif ch == '{':
+                in_str = True
+            elif ch == "{":
                 depth += 1
-            elif ch == '}':
+            elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    candidate = text[start:idx + 1]
                     try:
-                        return json.loads(candidate)
+                        return json.loads(cleaned[start : i + 1])
                     except json.JSONDecodeError:
                         return None
         return None
-
-    def _repair_json_response(self, bad_response: str) -> Optional[Dict[str, Any]]:
-        """
-        当模型没有按要求返回 JSON 时，发起一次轻量修复请求
-        """
-        repair_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是 JSON 修复器。"
-                    "你会把用户提供的文本转换为单个有效 JSON 对象。"
-                    "只输出 JSON，不要解释，不要 markdown。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "请把下面的内容改写为一个合法 JSON 对象。"
-                    "如果原文是结构化设计说明，请尽量保留字段层次。原文如下：\n\n"
-                    f"{bad_response}"
-                ),
-            },
-        ]
-
-        repaired_text = self.chat(
-            messages=repair_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            response_format={"type": "json_object"}
-        )
-        repaired_text = repaired_text.strip()
-        repaired_text = re.sub(r'^```(?:json)?\s*\n?', '', repaired_text, flags=re.IGNORECASE)
-        repaired_text = re.sub(r'\n?```\s*$', '', repaired_text).strip()
-
-        try:
-            return json.loads(repaired_text)
-        except json.JSONDecodeError:
-            return self._extract_json_object(repaired_text)
