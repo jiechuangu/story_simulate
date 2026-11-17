@@ -1,89 +1,59 @@
 """
-配置管理
-统一从项目根目录的 .env 文件加载配置
+配置管理：统一从项目根目录的 .env 加载。
 """
 
 import os
+
 from dotenv import load_dotenv
 
-# 加载项目根目录的 .env 文件
-# 路径: MiroFish/.env (相对于 backend/app/config.py)
-project_root_env = os.path.join(os.path.dirname(__file__), '../../.env')
-
-if os.path.exists(project_root_env):
-    load_dotenv(project_root_env, override=True)
+_root_env = os.path.join(os.path.dirname(__file__), "../../.env")
+if os.path.exists(_root_env):
+    load_dotenv(_root_env, override=True)
 else:
-    # 如果根目录没有 .env，尝试加载环境变量（用于生产环境）
     load_dotenv(override=True)
 
 
+def _int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
 class Config:
-    """Flask配置类"""
-    
-    # Flask配置
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'mirofish-secret-key')
-    DEBUG = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
-    
-    # JSON配置 - 禁用ASCII转义，让中文直接显示（而不是 \uXXXX 格式）
+    SECRET_KEY = os.environ.get("SECRET_KEY", "story-simulate")
+    DEBUG = os.environ.get("FLASK_DEBUG", "False").lower() == "true"
     JSON_AS_ASCII = False
-    
-    # LLM配置（统一使用OpenAI格式）
-    LLM_API_KEY = os.environ.get('LLM_API_KEY')
-    LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
-    LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
-    
-    # Zep配置
-    ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
-    GRAPH_STORE_PROVIDER = os.environ.get('GRAPH_STORE_PROVIDER', 'zep')
-    
-    # Neo4j Aura 配置
-    NEO4J_URI = os.environ.get('NEO4J_URI')
-    NEO4J_USERNAME = os.environ.get('NEO4J_USERNAME')
-    NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
-    NEO4J_DATABASE = os.environ.get('NEO4J_DATABASE')
-    
-    # 文件上传配置
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
-    ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
-    
-    # 文本处理配置
-    DEFAULT_CHUNK_SIZE = int(os.environ.get('DEFAULT_CHUNK_SIZE', '2400'))  # 默认切块大小，更适合小说增量构图
-    DEFAULT_CHUNK_OVERLAP = int(os.environ.get('DEFAULT_CHUNK_OVERLAP', '240'))  # 默认重叠大小
-    
-    # OASIS模拟配置
-    OASIS_DEFAULT_MAX_ROUNDS = int(os.environ.get('OASIS_DEFAULT_MAX_ROUNDS', '10'))
-    OASIS_SIMULATION_DATA_DIR = os.path.join(os.path.dirname(__file__), '../uploads/simulations')
-    
-    # OASIS平台可用动作配置
-    OASIS_TWITTER_ACTIONS = [
-        'CREATE_POST', 'LIKE_POST', 'REPOST', 'FOLLOW', 'DO_NOTHING', 'QUOTE_POST'
-    ]
-    OASIS_REDDIT_ACTIONS = [
-        'LIKE_POST', 'DISLIKE_POST', 'CREATE_POST', 'CREATE_COMMENT',
-        'LIKE_COMMENT', 'DISLIKE_COMMENT', 'SEARCH_POSTS', 'SEARCH_USER',
-        'TREND', 'REFRESH', 'DO_NOTHING', 'FOLLOW', 'MUTE'
-    ]
-    
-    # Report Agent配置
-    REPORT_AGENT_MAX_TOOL_CALLS = int(os.environ.get('REPORT_AGENT_MAX_TOOL_CALLS', '5'))
-    REPORT_AGENT_MAX_REFLECTION_ROUNDS = int(os.environ.get('REPORT_AGENT_MAX_REFLECTION_ROUNDS', '2'))
-    REPORT_AGENT_TEMPERATURE = float(os.environ.get('REPORT_AGENT_TEMPERATURE', '0.5'))
-    
+
+    # LLM（OpenAI 兼容接口）
+    LLM_API_KEY = os.environ.get("LLM_API_KEY")
+    LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
+    LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+    # 可选：写正文/润色使用更强的模型；不填则与 LLM_MODEL_NAME 相同
+    LLM_WRITER_MODEL_NAME = os.environ.get("LLM_WRITER_MODEL_NAME") or None
+    LLM_TIMEOUT = _int("LLM_TIMEOUT", 300)
+    # 被截断时自动加大 max_tokens 的上限（推理模型的思考过程也计入额度）
+    LLM_MAX_TOKENS_CAP = _int("LLM_MAX_TOKENS_CAP", 32000)
+
+    # 存储
+    MAX_CONTENT_LENGTH = 50 * 1024 * 1024
+    UPLOAD_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), "../uploads"))
+    STORIES_DIR = os.path.join(UPLOAD_FOLDER, "stories")
+    ALLOWED_EXTENSIONS = {"pdf", "md", "txt", "markdown"}
+
+    # 故事模拟参数
+    SOURCE_DIRECT_LIMIT = _int("STORY_SOURCE_DIRECT_LIMIT", 12000)   # 素材短于此长度直接使用
+    SOURCE_CHUNK_SIZE = _int("STORY_SOURCE_CHUNK_SIZE", 8000)
+    SOURCE_MAX_CHUNKS = _int("STORY_SOURCE_MAX_CHUNKS", 24)
+    SCENE_ROUNDS = _int("STORY_SCENE_ROUNDS", 2)                     # 每个场景角色轮流行动的轮数
+    SCENE_MAX_CHARACTERS = _int("STORY_SCENE_MAX_CHARACTERS", 3)
+    MAX_SCENES = _int("STORY_MAX_SCENES", 2)
+    MAX_NEW_CHARACTERS = _int("STORY_MAX_NEW_CHARACTERS", 1)          # 每章导演最多新登记的人物数
+    PREV_TAIL_CHARS = _int("STORY_PREV_TAIL_CHARS", 1500)            # 写作时带入上一章原文结尾的长度
+
     @classmethod
     def validate(cls):
-        """验证必要配置"""
         errors = []
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
-        provider = (cls.GRAPH_STORE_PROVIDER or 'zep').lower()
-        if provider == 'zep' and not cls.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY 未配置")
-        if provider == 'neo4j':
-            if not cls.NEO4J_URI:
-                errors.append("NEO4J_URI 未配置")
-            if not cls.NEO4J_USERNAME:
-                errors.append("NEO4J_USERNAME 未配置")
-            if not cls.NEO4J_PASSWORD:
-                errors.append("NEO4J_PASSWORD 未配置")
         return errors

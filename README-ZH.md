@@ -1,101 +1,51 @@
-# MiroFish Story MVP
+# Story Simulate
 
-当前这个仓库已经先改造成一版 **按章节推进的交互式小说引擎 MVP**。
+一个按章节推进的互动小说引擎：**先让世界里的人物行动，再把发生的事写成小说。** 每章结束后，由读者选择（或自己写）下一章的方向。
 
-你给它一个随机种子、一段设定、或者一份文本素材，系统会先生成一个轻量级 `story bible`，写出当前章节，然后给出 **3 个下一章 topic 候选**。用户点击其中一个，系统再继续写下一章。
+## 每章的流程
 
-## 当前 MVP 流程
+```
+导演安排场景（只定地点、在场人物和起始情境，不定结果）
+  → 角色轮流行动：每个角色只能看到自己知道的事实和亲历的往事，自己决定说什么、做什么
+  → 设定审校：检查有没有角色用了不该知道的信息、违背世界规则等，并修正
+  → 叙述者根据事件记录和上一章结尾原文写正文
+  → 润色：去掉 AI 腔
+  → 把状态变化（位置、情绪、目标、谁知道了什么、关系）写回世界状态
+  → 根据新的世界状态给出 3 个下一章方向
+```
 
-1. **种子输入**
-   上传文本材料，或者直接填写故事需求。
-2. **世界 / 图谱准备**
-   继续复用原有的图谱构建和模拟准备流程。
-3. **启动故事会话**
-   生成故事设定和第一章。
-4. **章节工作台**
-   阅读当前章节，并从 3 个下一章 topic 中选择一个。
-5. **后续互动**
-   章节生成后仍可进入已有的世界 / 角色视图。
+**世界状态（WorldState）是唯一的事实来源**，包括：角色、各角色已知的事实与秘密、关系、完整事件时间线、未解决的线索。界面右侧可以看到它，“幕后：事件记录”标签页可以看到每章实际发生了什么。
 
-## 这次改造后的核心变化
+## 功能
 
-- 原来的“报告生成”链路，现在被当成 **故事会话** 链路使用。
-- Step 4 不再是预测报告页。
-- Step 4 现在是 **章节阅读 + 下一章 topic 选择** 页面。
-- 后端现在持久化的数据包括：
-  - 故事标题 / premise / 风格
-  - 已生成章节
-  - 当前可选 topic
-  - 已选择 topic 历史
+- 输入故事需求和/或上传素材（txt / md / pdf）。长素材会分段整理再合并，不会直接截断。
+- 蓝图可以反复按意见修改，确认后才开始写第一章。
+- 每章可以：从 3 个方向里选一个、自己写方向、重写本章、回退到任意一章重新选择。
+- 任务状态保存在磁盘上；失败或后端重启后可以一键重试，失败时不会写入半成品状态。
 
-## MVP 的关键行为
+## 启动
 
-- 一次只生成一章，不直接整本写完。
-- 每章结束后固定生成 **3 个下一章候选 topic**。
-- 用户不选 topic，故事就不会自动继续。
-- 为了兼容旧结构，故事数据目前仍然保存在 `backend/uploads/reports/` 目录下。
-
-## 关键文件
-
-- 后端故事主循环：`backend/app/services/story_mvp.py`
-- 故事会话接口：`backend/app/api/report.py`
-- Step 4 章节界面：`frontend/src/components/Step4Report.vue`
-- 前端故事 API：`frontend/src/api/report.js`
-
-## 当前接口说明
-
-虽然路由名还保留 `/api/report/*`，但语义已经改成故事模式：
-
-- `POST /api/report/generate`
-  创建一个故事会话，并生成第一章。
-- `GET /api/report/<report_id>`
-  获取当前故事会话状态。
-- `POST /api/report/<report_id>/choose-topic`
-  选择一个下一章 topic，并继续生成下一章。
-
-## 本地开发
-
-### 环境要求
-
-- Node.js 18+
-- Python 3.11+
-- `uv`
-- 已配置 `LLM_API_KEY`
-
-### 安装依赖
+需要 Node.js 18+ 和 Python 3.11+。
 
 ```bash
+cp .env.example .env      # 填入 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL_NAME
 npm run setup:all
+npm run dev               # 前端 http://localhost:3000，后端 http://localhost:5001
 ```
 
-或者分步安装：
+任意 OpenAI 兼容接口都可以使用。生成一章大约需要 15–25 次 LLM 调用（其中角色行动约 6–12 次），
+建议把 `LLM_WRITER_MODEL_NAME` 设为写作能力更强的模型，用于写正文和润色。模拟参数见 `.env.example`。
 
-```bash
-npm run setup
-npm run setup:backend
+## 代码结构
+
 ```
-
-### 启动项目
-
-```bash
-npm run dev
+backend/app/
+  story/models.py    数据模型：WorldState / Character / Fact / Event / Chapter / StorySession
+  story/engine.py    引擎：素材整理、蓝图、导演、角色行动、审校、写作、润色、状态回写、方向生成
+  story/prompts.py   所有提示词
+  story/memory.py    从 WorldState 中检索上下文（按角色、关系、可见范围，加文本相似度）
+  story/service.py   后台任务（状态持久化、重试、回退）
+  story/store.py     存储：uploads/stories/<id>/session.json、story.md
+  api/story.py       REST 接口 /api/story/*
+frontend/src/views/  Home.vue（创建 / 列表）、StoryView.vue（蓝图、阅读、方向选择、世界状态）
 ```
-
-默认端口：
-
-- 前端：`http://localhost:3000`
-- 后端：`http://localhost:5001`
-
-## 当前限制
-
-- 公开路由名称还叫 `report`，这一轮只改了行为和主链命名。
-- Step 5 里还有不少旧的 report 文案和变量名没完全清干净。
-- “Story Guide Chat” 现在只是一个轻量占位，不是完整的剧情问答 Agent。
-- 还没有实现完整分支树、回退重选、章节重写流水线。
-
-## 下一步建议
-
-1. 把路由、视图、模型里的 `report` 统一改成 `story`。
-2. 增加章节目录和分支历史。
-3. 增加“重写本章”和“重新生成 topic”。
-4. 把 Step 5 也统一成小说术语和流程。
